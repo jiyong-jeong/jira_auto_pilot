@@ -42,6 +42,8 @@ PLANNED_LABEL="${PLANNED_LABEL:-claude-planned}"
 ANSWERED_LABEL="${ANSWERED_LABEL:-claude-answered}"   # 담당자가 답변 완료를 알리는 명시 라벨(build 진입 게이트)
 FAILED_LABEL="${FAILED_LABEL:-claude-failed}"   # 반복 실패 카드 표시(탐지 제외)
 MAX_RETRIES="${MAX_RETRIES:-3}"                 # 연속 실패 N회 초과 시 실패 처리
+TEST_CMD="${TEST_CMD:-}"                        # 테스트 명령(비우면 claude 가 자동 감지)
+BUILD_CMD="${BUILD_CMD:-}"                      # 빌드 명령(비우면 claude 가 자동 감지)
 
 if [[ -z "${REPO_URL}" ]]; then
   echo "ERROR: REPO_URL 이 설정되지 않았습니다. 환경변수로 대상 repo URL 을 지정하세요." >&2
@@ -75,6 +77,10 @@ else
   SUMMARY_INSTR="이슈 ${ISSUE_KEY} 에 완료 요약을 코멘트로 남기세요.
       요약에는 변경 내용 요약, PR URL, 브랜치명, 완료 일시를 포함하세요."
 fi
+
+# ===== PR 전 검증(테스트/빌드) 지시 — TEST_CMD/BUILD_CMD 미설정 시 claude 가 자동 감지 =====
+TEST_DESC="${TEST_CMD:-자동 감지(package.json scripts.test, pytest/pytest.ini, go test, Makefile 의 test 타깃 등)}"
+BUILD_DESC="${BUILD_CMD:-자동 감지(npm run build, tsc, go build, make 등 빌드/컴파일 수단)}"
 
 # ===== 카드별 디렉토리 (병렬 실행용) =====
 REPO_DIR="${CLONE_BASE}/${REPO_NAME}-${ISSUE_KEY}"
@@ -177,18 +183,25 @@ else
    (a) 이슈에 '${ANSWERED_LABEL}' 라벨이 붙어 있을 것 (담당자가 답변 완료를 명시한 신호).
    (b) plan 단계의 bot 질문 코멘트 이후에 담당자 ${ASSIGNEE_NAME} 의 실제 답변 코멘트가 존재할 것.
 3. 답변이 있으면 그 내용을 반영해 요구된 작업을 구현하세요.
-4. 구현 후:
+4. PR 전 검증 (중요):
+   - 테스트 수단(${TEST_DESC})이 이 프로젝트에 존재하는지 확인하세요.
+   - 테스트가 '존재하면' 실행하세요. 실패하면 원인을 고치고 다시 실행하기를 '통과할 때까지' 반복하세요.
+     (도저히 통과시킬 수 없으면 사유를 출력하고 비정상 종료하세요. PR 을 만들지 마세요.)
+   - 테스트가 '존재하지 않으면' 테스트는 건너뛰고, 빌드/컴파일(${BUILD_DESC})만 시도하세요.
+     빌드 수단이 있으면 실행해 통과시키고(실패 시 고쳐서 통과), 빌드 수단 자체가 없으면 이 단계를 건너뜁니다.
+   - 검증을 통과(또는 정당하게 건너뜀)한 경우에만 다음 단계로 진행하세요.
+5. 구현·검증 후:
    - Jira 이슈 키를 반영한 새 git 브랜치를 만드세요 (예: feature/${ISSUE_KEY}-<짧은-설명>).
    - 명확한 메시지로 커밋하세요. 커밋 메시지 '본문 하단'에 '${ISSUE_KEY}' 를 명시하세요.
    - 'origin' 으로 브랜치를 push 하세요.
    - gh CLI 로 '${BASE_BRANCH}' 브랜치를 target 으로 하는 Pull Request 를 생성하고 PR URL 을 출력하세요.
    - (보안) env 파일(${ENV_DEST} 또는 .env)은 절대 커밋/푸시하지 마세요. 커밋 전 git status 로 확인하고,
      포함될 위험이 있으면 .gitignore 에 추가하세요.
-5. PR 생성까지 성공하면 마무리로:
+6. PR 생성까지 성공하면 마무리로:
    a) ${SUMMARY_INSTR}
    b) 이슈 상태를 '${DONE_STATUS}' 로 전환하세요. 가능한 transition 을 먼저 조회한 뒤 전환하고,
       전환이 불가능하면 사유를 출력하세요.
-완료 후 결과(브랜치/PR URL/상태) 요약을 출력하세요."
+완료 후 결과(테스트/빌드 결과 · 브랜치 · PR URL · 상태) 요약을 출력하세요."
 fi
 
 # ===== 실행 + 실패 재시도/백오프 처리 =====

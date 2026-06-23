@@ -36,6 +36,8 @@ const DEFAULT_CONFIG = {
   answeredLabel: "claude-answered",             // 담당자 답변 완료 신호(build 진입 게이트)
   failedLabel: "claude-failed",                 // 반복 실패 카드 표시(탐지 제외)
   maxRetries: 3,                                // 연속 실패 N회 초과 시 실패 처리
+  testCmd: "",                                  // 테스트 명령(비우면 claude 자동 감지)
+  buildCmd: "",                                 // 빌드 명령(비우면 claude 자동 감지)
   intervalSeconds: 3600,
   envPath: path.join(SCRIPTS_DIR, "work.env"),  // 대상 repo로 복사할 env 파일
   cloneBase: path.join(SCRIPTS_DIR, "repos"),   // clone 베이스 폴더
@@ -84,6 +86,8 @@ function scriptEnv() {
   env.ANSWERED_LABEL = cfg.answeredLabel || "claude-answered";
   env.FAILED_LABEL = cfg.failedLabel || "claude-failed";
   env.MAX_RETRIES = String(cfg.maxRetries || 3);
+  env.TEST_CMD = cfg.testCmd || "";
+  env.BUILD_CMD = cfg.buildCmd || "";
   env.PROJECT_KEY = cfg.projectKey || "";
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
