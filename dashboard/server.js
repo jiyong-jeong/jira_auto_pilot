@@ -160,6 +160,25 @@ function runOnce(type) {
   return { ok: true, pid: proc.pid };
 }
 
+// 특정 카드 1건만 즉시 실행: detect 를 거치지 않고 run-jira-claude.sh <key> <phase> 직접 실행.
+// 출력은 loop-<phase>.log 에 append 되어 대시보드 로그에 바로 보인다. 카드 락으로 중복 방지.
+function runCard(key, phase, stamp) {
+  const script = path.join(SCRIPTS_DIR, "run-jira-claude.sh");
+  if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
+  const logPath = path.join(SCRIPTS_DIR, `loop-${phase}.log`);
+  let fd;
+  try {
+    fd = fs.openSync(logPath, "a");
+    fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${phase.toUpperCase()}: ${key}\n`);
+  } catch (e) { return { ok: false, message: String(e.message || e) }; }
+  const proc = spawn("bash", [script, key, phase], {
+    cwd: SCRIPTS_DIR, env: scriptEnv(), detached: true, stdio: ["ignore", fd, fd],
+  });
+  try { fs.closeSync(fd); } catch {} // 자식이 fd 를 상속받으므로 부모는 닫아도 됨
+  proc.unref();
+  return { ok: true, pid: proc.pid };
+}
+
 function stopLoop(type) {
   const pid = readPid(type);
   if (!isAlive(pid)) {
@@ -401,6 +420,15 @@ app.post("/api/loops/:type/run-once", (req, res) => {
   const { type } = req.params;
   if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(runOnce(type));
+});
+
+// 특정 카드 1건 즉시 실행
+app.post("/api/cards/:key/run", (req, res) => {
+  const key = req.params.key;
+  const phase = (req.body || {}).phase;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build" });
+  res.json(runCard(key, phase, new Date().toISOString()));
 });
 
 // REST 기반 결정적 탐지 (루프가 claude 탐지 대신 우선 사용; 실패 시 claude 폴백)

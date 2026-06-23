@@ -154,7 +154,11 @@ function App() {
   };
   const runOnce = async (type) => {
     const r = await api.post(`/api/loops/${type}/run-once`);
-    flash(r.ok ? `${type} 즉시 실행 시작 — 로그를 확인하세요` : (r.message || "실패"));
+    flash(r.ok ? `${type} 전체 즉시 실행 시작 — 로그를 확인하세요` : (r.message || "실패"));
+  };
+  const runCardNow = async (key, phase) => {
+    const r = await api.post(`/api/cards/${key}/run`, { phase });
+    flash(r.ok ? `${key} ${phase} 즉시 실행 — 로그를 확인하세요` : (r.message || "실패"));
   };
   const loadCards = async () => {
     const r = await api.get("/api/cards");
@@ -280,7 +284,7 @@ function App() {
                   <Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>
                     {running ? "중지" : "시작"}
                   </Btn>
-                  <Btn color="indigo" onClick={() => runOnce(type)}>지금 실행</Btn>
+                  <Btn color="indigo" onClick={() => runOnce(type)}>전체 실행</Btn>
                 </div>
               </div>
             );
@@ -462,6 +466,12 @@ function App() {
                             <p className="text-rose-400 text-sm">{detail.error}</p>
                           ) : detail && (
                             <div>
+                              <div className="flex items-center gap-2 mb-3 pb-3 border-b border-slate-700">
+                                <span className="text-xs text-slate-400">이 카드만 즉시 실행:</span>
+                                <Btn color="indigo" onClick={() => runCardNow(c.key, "plan")}>plan</Btn>
+                                <Btn color="indigo" onClick={() => runCardNow(c.key, "build")}>build</Btn>
+                                <span className="text-[11px] text-slate-500">진행은 아래 실시간 로그에서 확인</span>
+                              </div>
                               <div className="text-xs text-slate-400 mb-1">원문 설명</div>
                               <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
                               <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
