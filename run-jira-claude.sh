@@ -243,7 +243,29 @@ FAIL_FILE="${STATE_DIR}/${ISSUE_KEY}.fail"
 CLAUDE_OUT="${STATE_DIR}/${ISSUE_KEY}.${PHASE}.out"
 mkdir -p "${STATE_DIR}"
 
-if claude -p "${PROMPT}" 2>&1 | tee "${CLAUDE_OUT}"; then
+# claude 상세 실행 로그(도구 호출/메시지/결과)를 카드별로 영속 기록 → 대시보드에서 조회
+CLAUDE_LOG_DIR="${WORK_DIR}/claude-logs"
+mkdir -p "${CLAUDE_LOG_DIR}"
+CLAUDE_LOG="${CLAUDE_LOG_DIR}/${ISSUE_KEY}-${PHASE}.log"
+{ echo ""; echo "===== $(date -u +%FT%TZ) ${ISSUE_KEY} ${PHASE} 실행 ====="; } >> "${CLAUDE_LOG}"
+
+# stream-json + 렌더러로 과정을 사람이 읽게 기록하고 최종 결과 텍스트는 CLAUDE_OUT 으로 추출.
+# node/렌더러가 없으면 기존 텍스트 모드로 폴백(자동화 동작에는 영향 없음).
+set +e
+if command -v node >/dev/null 2>&1 && [[ -f "${SELF_DIR}/render-claude-stream.js" ]]; then
+  claude -p "${PROMPT}" --output-format stream-json --verbose 2>>"${CLAUDE_LOG}" \
+    | node "${SELF_DIR}/render-claude-stream.js" "${CLAUDE_LOG}" \
+    | tee "${CLAUDE_OUT}"
+  CSTATUS=${PIPESTATUS[0]}; RSTATUS=${PIPESTATUS[1]}
+  [[ "${CSTATUS}" -eq 0 && "${RSTATUS}" -eq 0 ]]; CLAUDE_OK=$?
+else
+  claude -p "${PROMPT}" 2>&1 | tee "${CLAUDE_OUT}"
+  CLAUDE_OK=${PIPESTATUS[0]}
+  cat "${CLAUDE_OUT}" >> "${CLAUDE_LOG}" 2>/dev/null || true
+fi
+set -e
+
+if [[ "${CLAUDE_OK}" -eq 0 ]]; then
   rm -f "${FAIL_FILE}"
   echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE})"
   # 결과 분류 + PR/브랜치 추출해 이력 기록

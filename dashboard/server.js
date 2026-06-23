@@ -601,6 +601,19 @@ app.post("/api/jira/issue", async (req, res) => {
   }
 });
 
+// ----- 카드별 claude 상세 실행 로그(도구 호출/메시지/결과) -----
+app.get("/api/claude-log/:key/:phase", (req, res) => {
+  const { key, phase } = req.params;
+  if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 오류" });
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "키 형식 오류" });
+  const cfg = getConfig();
+  const p = path.join(cfg.workDir || SCRIPTS_DIR, "claude-logs", `${key}-${phase}.log`);
+  if (!fs.existsSync(p)) return res.json({ ok: true, log: "(아직 claude 실행 로그가 없습니다)" });
+  const lines = Math.min(parseInt(req.query.lines || "500", 10), 5000);
+  const content = fs.readFileSync(p, "utf8").split("\n");
+  res.json({ ok: true, log: content.slice(-lines).join("\n") });
+});
+
 // ----- 카드 상세: 원문 설명 + 코멘트 -----
 app.get("/api/jira/issue/:key", async (req, res) => {
   try {

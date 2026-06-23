@@ -19,6 +19,9 @@ history.jsonl
 # 루프 pidfile (런타임 생성)
 loop-*.pid
 
+# claude 카드별 실행 로그 (런타임 생성)
+claude-logs/
+
 # 의존성
 node_modules/
 
