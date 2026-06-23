@@ -32,10 +32,11 @@
   - 영향: `run-jira-claude.sh`
   → (완료 2026-06-23) `fetch --prune` → `reset --hard` + `clean -fd` → base checkout → `reset --hard origin/<base>` 로 결정적 정렬(`git pull` 대체). plan/build 공통 적용.
 
-- [ ] **4. env 유출 방지 강화**
+- [x] **4. env 유출 방지 강화**
   - 내용: `work.env`가 대상 repo로 커밋되는 사고를 구조적으로 차단.
   - AC: env 복사 직후 clone의 `.git/info/exclude`에 env 파일명을 자동 추가(프롬프트 의존 제거).
   - 영향: `run-jira-claude.sh`
+  → (완료 2026-06-23) env 복사 직후 `.git/info/exclude` 에 env 파일명·`.env` 를 멱등 등록(grep -qxF 중복 방지). repo `.gitignore` 와 무관한 로컬 전용 차단.
 
 - [ ] **5. 탐지 로직 REST 전환**
   - 내용: detect를 `claude` 호출 대신 백엔드 Jira REST로 전환(빠르고 결정적, 비용 절감).

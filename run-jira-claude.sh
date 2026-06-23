@@ -102,6 +102,15 @@ git reset --hard "origin/${BASE_BRANCH}"
 if [[ -f "${ENV_SRC}" ]]; then
   cp "${ENV_SRC}" "${ENV_DEST}"
   echo ">> [${ISSUE_KEY}] env 복사: ${ENV_SRC} -> ${ENV_DEST}"
+  # env 유출 방지: clone 의 .git/info/exclude 에 env 파일명을 등록해 추적/커밋을 구조적으로 차단
+  # (.gitignore 수정과 달리 repo 에 커밋되지 않는 로컬 전용 ignore). 프롬프트 의존 제거.
+  EXCLUDE_FILE="${REPO_DIR}/.git/info/exclude"
+  for pat in "${ENV_NAME}" ".env"; do
+    if [[ ! -f "${EXCLUDE_FILE}" ]] || ! grep -qxF "${pat}" "${EXCLUDE_FILE}"; then
+      echo "${pat}" >> "${EXCLUDE_FILE}"
+    fi
+  done
+  echo ">> [${ISSUE_KEY}] .git/info/exclude 에 env 패턴 등록(${ENV_NAME}, .env)"
 else
   echo ">> [${ISSUE_KEY}] WARN: env 파일 없음: ${ENV_SRC} (건너뜀)"
 fi
