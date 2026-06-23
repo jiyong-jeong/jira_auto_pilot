@@ -1,9 +1,8 @@
 // =============================================================================
-// Jira -> Claude 루프 자동화 대시보드 백엔드 (Express)
-// - 설정(config) / 자격증명(credentials) 로컬 저장
-// - loop-plan / loop-build 스크립트 start/stop/status
-// - 로그 tail
-// - Jira REST 로 claude-work 카드 상태 조회
+// Jira -> Claude 루프 자동화 대시보드 백엔드 (Express) — 멀티 프로젝트
+// - 프로젝트(설정) / 프로젝트별 자격증명 로컬 저장
+// - loop-plan / loop-build 스크립트 start/stop/status (한 루프가 전 프로젝트 순회 — Phase 2)
+// - 로그 tail / 처리 이력 / Jira REST (카드 조회·등록·답변·첨부)
 // =============================================================================
 const express = require("express");
 const fs = require("fs");
@@ -16,82 +15,158 @@ app.use(express.json({ limit: "25mb" })); // 이미지(base64) 첨부 페이로�
 const PORT = process.env.PORT || 4317;
 const ROOT = __dirname;                       // dashboard 폴더
 const SCRIPTS_DIR = path.resolve(ROOT, ".."); // loop-work 폴더 (스크립트/로그 위치)
-const CONFIG_PATH = path.join(ROOT, "config.json");
-const CRED_PATH = path.join(ROOT, "credentials.json");
-const HISTORY_PATH = path.join(SCRIPTS_DIR, "history.jsonl"); // run-jira-claude.sh 가 기록하는 처리 이력
+const PROJECTS_PATH = path.join(ROOT, "projects.json");            // 프로젝트 목록(설정)
+const PROJECT_CREDS_PATH = path.join(ROOT, "project-credentials.json"); // 프로젝트별 자격증명
+const CONFIG_PATH = path.join(ROOT, "config.json");               // (레거시) 단일 설정 — 마이그레이션용
+const CRED_PATH = path.join(ROOT, "credentials.json");            // (레거시) 단일 자격증명 — 마이그레이션용
+const HISTORY_PATH = path.join(SCRIPTS_DIR, "history.jsonl");      // run-jira-claude.sh 가 기록하는 처리 이력
 
-// ----- 기본 설정값 (중립 기본값 — 대시보드에서 프로젝트별로 설정) -----
+// ----- 프로젝트 설정 기본값(템플릿) -----
 const DEFAULT_CONFIG = {
   workDir: SCRIPTS_DIR,
-  repoUrl: "",                                  // 대상 GitHub repo URL
+  repoUrl: "",
   baseBranch: "main",
-  jiraSite: "",                                 // 예: your-team.atlassian.net
-  projectKey: "",                               // 예: PROJ
+  jiraSite: "",
+  projectKey: "",
   assigneeEmail: "",
   assigneeName: "",
-  triggerMode: "label",                         // label | text — 트리거 판정 방식(label 권장)
-  triggerLabel: "claude-work",                  // label 모드 트리거 라벨
-  triggerText: "claude-work",                   // text 모드(레거시) 트리거 텍스트
+  triggerMode: "label",
+  triggerLabel: "claude-work",
+  triggerText: "claude-work",
   doneStatus: "DEV COMPLETED",
   plannedLabel: "claude-planned",
-  answeredLabel: "claude-answered",             // 담당자 답변 완료 신호(build 진입 게이트)
-  failedLabel: "claude-failed",                 // 반복 실패 카드 표시(탐지 제외)
-  maxRetries: 3,                                // 연속 실패 N회 초과 시 실패 처리
-  maxParallel: 3,                               // 동시에 처리할 카드 수 상한
-  testCmd: "",                                  // 테스트 명령(비우면 claude 자동 감지)
-  buildCmd: "",                                 // 빌드 명령(비우면 claude 자동 감지)
+  answeredLabel: "claude-answered",
+  failedLabel: "claude-failed",
+  maxRetries: 3,
+  maxParallel: 3,
+  testCmd: "",
+  buildCmd: "",
   intervalSeconds: 3600,
-  envMode: "content",                           // content(내용 직접 입력) | path(파일 경로 지정)
-  envPath: path.join(SCRIPTS_DIR, "work.env"),  // 대상 repo로 복사할 env 파일(=ENV_SRC)
-  cloneBase: path.join(SCRIPTS_DIR, "repos"),   // clone 베이스 폴더
+  envMode: "content",
+  envPath: "",                                  // 비우면 <workDir>/work-<id>.env 사용
+  cloneBase: path.join(SCRIPTS_DIR, "repos"),
 };
+const DEFAULT_CREDS = { anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" };
 
 // ----- 파일 IO 헬퍼 -----
 function readJson(p, fallback) {
-  try {
-    return JSON.parse(fs.readFileSync(p, "utf8"));
-  } catch {
-    return fallback;
-  }
+  try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return fallback; }
 }
 function writeJson(p, obj, mode) {
   fs.writeFileSync(p, JSON.stringify(obj, null, 2), { mode: mode || 0o644 });
 }
-function getConfig() {
-  return { ...DEFAULT_CONFIG, ...readJson(CONFIG_PATH, {}) };
+
+// ----- 프로젝트 스토어 -----
+function slugify(s) {
+  return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "proj";
 }
-function getCreds() {
-  return readJson(CRED_PATH, {
-    anthropicApiKey: "",
-    githubToken: "",
-    atlassianEmail: "",
-    atlassianToken: "",
-    slackWebhookUrl: "",
-  });
+function migrateIfNeeded() {
+  if (readJson(PROJECTS_PATH, null)) return; // 이미 멀티 프로젝트
+  const legacy = readJson(CONFIG_PATH, null);
+  if (legacy) {
+    const id = slugify(legacy.projectKey || "default");
+    const name = legacy.projectKey || "기본 프로젝트";
+    writeJson(PROJECTS_PATH, { projects: [{ id, name, ...legacy }] });
+    const lc = readJson(CRED_PATH, null);
+    if (lc) writeJson(PROJECT_CREDS_PATH, { [id]: { ...DEFAULT_CREDS, ...lc } }, 0o600);
+    console.log(`  마이그레이션: 기존 설정을 프로젝트 '${id}' 로 가져왔습니다.`);
+  } else {
+    writeJson(PROJECTS_PATH, { projects: [] });
+  }
+}
+function listProjects() {
+  const raw = readJson(PROJECTS_PATH, { projects: [] });
+  return (raw.projects || []).map((p) => ({ ...DEFAULT_CONFIG, ...p }));
+}
+function getProject(id) {
+  return listProjects().find((p) => p.id === id) || null;
+}
+function defaultProjectId() {
+  const list = listProjects();
+  return list.length ? list[0].id : null;
+}
+function saveProject(p) {
+  const list = listProjects();
+  let id = p.id || slugify(p.name || p.projectKey || "proj");
+  if (!p.id) { const base = id; let n = 2; while (list.some((x) => x.id === id)) id = `${base}-${n++}`; }
+  const idx = list.findIndex((x) => x.id === id);
+  const merged = idx >= 0 ? { ...list[idx], ...p, id } : { ...DEFAULT_CONFIG, ...p, id };
+  if (idx >= 0) list[idx] = merged; else list.push(merged);
+  writeJson(PROJECTS_PATH, { projects: list });
+  return merged;
+}
+function removeProject(id) {
+  const list = listProjects().filter((p) => p.id !== id);
+  writeJson(PROJECTS_PATH, { projects: list });
+  const creds = readJson(PROJECT_CREDS_PATH, {});
+  if (creds[id]) { delete creds[id]; writeJson(PROJECT_CREDS_PATH, creds, 0o600); }
+}
+function getProjectCreds(id) {
+  const all = readJson(PROJECT_CREDS_PATH, {});
+  return { ...DEFAULT_CREDS, ...(all[id] || {}) };
+}
+function setProjectCreds(id, next) {
+  const all = readJson(PROJECT_CREDS_PATH, {});
+  all[id] = { ...DEFAULT_CREDS, ...(all[id] || {}), ...next };
+  writeJson(PROJECT_CREDS_PATH, all, 0o600);
+}
+function projectEnvPath(cfg) {
+  return cfg.envPath || path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}.env`);
 }
 
-// ----- 실행 중인 루프 프로세스 추적 (pidfile 기반: 백엔드 재시작 후에도 상태 일치) -----
-const loops = { plan: null, build: null }; // 메모리 핸들(있으면 사용): { proc }
+// 레거시 호환: 인자 없는 호출은 "첫 프로젝트"를 사용(기존 단일 프로젝트 UI 유지)
+function getConfig(id) {
+  const pid = id || defaultProjectId();
+  return (pid && getProject(pid)) || { ...DEFAULT_CONFIG, id: "default" };
+}
+function getCreds(id) {
+  const pid = id || defaultProjectId();
+  return pid ? getProjectCreds(pid) : { ...DEFAULT_CREDS };
+}
+
+// 요청에서 프로젝트 해석(?project=id 또는 body.project, 없으면 첫 프로젝트)
+function resolveProject(req) {
+  const id = (req.query && req.query.project) || (req.body && req.body.project) || defaultProjectId();
+  const cfg = id && getProject(id);
+  if (!cfg) { const e = new Error("프로젝트가 없습니다. 먼저 프로젝트를 등록하세요."); e.code = 404; throw e; }
+  return { id: cfg.id, cfg, cred: getProjectCreds(cfg.id) };
+}
+function maskCreds(c) {
+  return {
+    anthropicApiKey: !!c.anthropicApiKey, githubToken: !!c.githubToken,
+    atlassianEmail: c.atlassianEmail || "", atlassianToken: !!c.atlassianToken,
+    slackWebhookUrl: !!c.slackWebhookUrl,
+  };
+}
+function applyCreds(cur, b) {
+  const apply = (k) => (b[k] === undefined ? cur[k] : b[k] === "__CLEAR__" ? "" : b[k] === "" ? cur[k] : b[k]);
+  return {
+    anthropicApiKey: apply("anthropicApiKey"),
+    githubToken: apply("githubToken"),
+    atlassianEmail: b.atlassianEmail !== undefined ? b.atlassianEmail : cur.atlassianEmail,
+    atlassianToken: apply("atlassianToken"),
+    slackWebhookUrl: apply("slackWebhookUrl"),
+  };
+}
+
+migrateIfNeeded();
+
+// ----- 실행 중인 루프 프로세스 추적 (pidfile 기반) -----
+const loops = { plan: null, build: null };
 const pidFile = (type) => path.join(SCRIPTS_DIR, `loop-${type}.pid`);
-
 function readPid(type) {
-  try {
-    const pid = parseInt(fs.readFileSync(pidFile(type), "utf8").trim(), 10);
-    return Number.isInteger(pid) ? pid : null;
-  } catch { return null; }
+  try { const pid = parseInt(fs.readFileSync(pidFile(type), "utf8").trim(), 10); return Number.isInteger(pid) ? pid : null; }
+  catch { return null; }
 }
-function isAlive(pid) {
-  if (!pid) return false;
-  try { process.kill(pid, 0); return true; } catch { return false; }
-}
-function clearPid(type) {
-  try { fs.unlinkSync(pidFile(type)); } catch {}
-}
+function isAlive(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
+function clearPid(type) { try { fs.unlinkSync(pidFile(type)); } catch {} }
 
-function scriptEnv() {
-  const cfg = getConfig();
-  const cred = getCreds();
+// 프로젝트별 env (run-jira-claude.sh 에 주입). id 미지정 시 첫 프로젝트.
+function scriptEnv(id) {
+  const cfg = getConfig(id);
+  const cred = getCreds(cfg.id);
   const env = { ...process.env };
+  env.PROJECT_ID = cfg.id || "";
   env.WORK_DIR = cfg.workDir;
   env.REPO_URL = cfg.repoUrl;
   env.BASE_BRANCH = cfg.baseBranch;
@@ -109,94 +184,62 @@ function scriptEnv() {
   env.BUILD_CMD = cfg.buildCmd || "";
   env.HISTORY_FILE = HISTORY_PATH;
   env.PROJECT_KEY = cfg.projectKey || "";
-  env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
+  env.ENV_SRC = projectEnvPath(cfg);
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
   env.LOOP_INTERVAL = String(cfg.intervalSeconds || 3600);
   env.MAX_PARALLEL = String(cfg.maxParallel || 3);
-  env.DASHBOARD_URL = `http://localhost:${PORT}`; // 루프가 REST 탐지를 호출할 주소
+  env.DASHBOARD_URL = `http://localhost:${PORT}`;
   if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
-  if (cred.githubToken) {
-    env.GH_TOKEN = cred.githubToken;
-    env.GITHUB_TOKEN = cred.githubToken;
-  }
+  if (cred.githubToken) { env.GH_TOKEN = cred.githubToken; env.GITHUB_TOKEN = cred.githubToken; }
   if (cred.slackWebhookUrl) env.SLACK_WEBHOOK_URL = cred.slackWebhookUrl;
   return env;
 }
 
 function startLoop(type) {
   const existing = readPid(type);
-  if (isAlive(existing)) {
-    return { ok: false, message: `${type} 루프가 이미 실행 중입니다 (pid ${existing}).` };
-  }
-  clearPid(type); // 죽은 프로세스의 잔여 pidfile 정리
+  if (isAlive(existing)) return { ok: false, message: `${type} 루프가 이미 실행 중입니다 (pid ${existing}).` };
+  clearPid(type);
   const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
-  if (!fs.existsSync(script)) {
-    return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
-  }
-  const proc = spawn("bash", [script], {
-    cwd: SCRIPTS_DIR,
-    env: scriptEnv(),
-    detached: true,
-    stdio: "ignore",
-  });
-  fs.writeFileSync(pidFile(type), String(proc.pid)); // 디스크에 pid 기록(재시작 후 복구용)
+  if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
+  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env: { ...process.env, DASHBOARD_URL: `http://localhost:${PORT}` }, detached: true, stdio: "ignore" });
+  fs.writeFileSync(pidFile(type), String(proc.pid));
   loops[type] = { proc };
   proc.on("exit", () => {
     if (loops[type] && loops[type].proc === proc) loops[type] = null;
-    if (readPid(type) === proc.pid) clearPid(type); // 스스로 종료 시 pidfile 정리
+    if (readPid(type) === proc.pid) clearPid(type);
   });
-  proc.unref(); // 백엔드가 자식 때문에 이벤트 루프를 붙들지 않도록
-  return { ok: true, pid: proc.pid };
-}
-
-// 즉시 1회 실행: 스케줄을 기다리지 않고 detect→처리를 한 번 수행(같은 loop-<type>.log 에 기록).
-// 스케줄 루프와 별개 프로세스이며 pidfile 을 쓰지 않는다(일회성). 카드 락으로 중복 처리는 방지됨.
-function runOnce(type) {
-  const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
-  if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
-  const env = scriptEnv();
-  env.RUN_ONCE = "1";
-  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env, detached: true, stdio: "ignore" });
   proc.unref();
   return { ok: true, pid: proc.pid };
 }
-
-// 특정 카드 1건만 즉시 실행: detect 를 거치지 않고 run-jira-claude.sh <key> <phase> 직접 실행.
-// 출력은 loop-<phase>.log 에 append 되어 대시보드 로그에 바로 보인다. 카드 락으로 중복 방지.
-function runCard(key, phase, stamp) {
+function runOnce(type) {
+  const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
+  if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
+  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env: { ...process.env, RUN_ONCE: "1", DASHBOARD_URL: `http://localhost:${PORT}` }, detached: true, stdio: "ignore" });
+  proc.unref();
+  return { ok: true, pid: proc.pid };
+}
+// 특정 카드 1건 즉시 실행(프로젝트 env 주입)
+function runCard(key, phase, stamp, projectId) {
   const script = path.join(SCRIPTS_DIR, "run-jira-claude.sh");
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
   const logPath = path.join(SCRIPTS_DIR, `loop-${phase}.log`);
   let fd;
   try {
     fd = fs.openSync(logPath, "a");
-    fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${phase.toUpperCase()}: ${key}\n`);
+    fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${phase.toUpperCase()}: ${key} [${projectId}]\n`);
   } catch (e) { return { ok: false, message: String(e.message || e) }; }
-  const proc = spawn("bash", [script, key, phase], {
-    cwd: SCRIPTS_DIR, env: scriptEnv(), detached: true, stdio: ["ignore", fd, fd],
-  });
-  try { fs.closeSync(fd); } catch {} // 자식이 fd 를 상속받으므로 부모는 닫아도 됨
+  const proc = spawn("bash", [script, key, phase], { cwd: SCRIPTS_DIR, env: scriptEnv(projectId), detached: true, stdio: ["ignore", fd, fd] });
+  try { fs.closeSync(fd); } catch {}
   proc.unref();
   return { ok: true, pid: proc.pid };
 }
-
 function stopLoop(type) {
   const pid = readPid(type);
-  if (!isAlive(pid)) {
-    clearPid(type);
-    loops[type] = null;
-    return { ok: false, message: `${type} 루프가 실행 중이 아닙니다.` };
-  }
-  try {
-    process.kill(-pid, "SIGTERM"); // 프로세스 그룹 종료(loop + run-jira-claude + claude 자식 포함)
-  } catch {
-    try { process.kill(pid, "SIGTERM"); } catch {}
-  }
-  clearPid(type);
-  loops[type] = null;
+  if (!isAlive(pid)) { clearPid(type); loops[type] = null; return { ok: false, message: `${type} 루프가 실행 중이 아닙니다.` }; }
+  try { process.kill(-pid, "SIGTERM"); } catch { try { process.kill(pid, "SIGTERM"); } catch {} }
+  clearPid(type); loops[type] = null;
   return { ok: true };
 }
-
 function loopStatus() {
   const out = {};
   for (const t of ["plan", "build"]) {
@@ -205,46 +248,30 @@ function loopStatus() {
       let startedAt = null;
       try { startedAt = fs.statSync(pidFile(t)).mtime.toISOString(); } catch {}
       out[t] = { running: true, pid, startedAt };
-    } else {
-      if (pid) clearPid(t); // stale pidfile 정리(크래시 등으로 죽은 경우)
-      out[t] = { running: false };
-    }
+    } else { if (pid) clearPid(t); out[t] = { running: false }; }
   }
   return out;
 }
 
-// ----- Jira REST: 카드 상태 조회 -----
-async function jiraSearch(jql) {
-  const cfg = getConfig();
-  const cred = getCreds();
-  if (!cred.atlassianEmail || !cred.atlassianToken) {
-    throw new Error("Atlassian 이메일/토큰이 설정되지 않았습니다.");
-  }
-  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
-  const url = `https://${cfg.jiraSite}/rest/api/3/search/jql`;
-  const res = await fetch(url, {
+// ----- Jira REST (프로젝트의 cfg/cred 사용) -----
+function jiraAuth(cred) {
+  if (!cred.atlassianEmail || !cred.atlassianToken) throw new Error("Atlassian 이메일/토큰이 설정되지 않았습니다.");
+  return Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
+}
+async function jiraSearch(jql, cfg, cred) {
+  const auth = jiraAuth(cred);
+  if (!cfg.jiraSite) throw new Error("Jira 사이트가 설정되지 않았습니다.");
+  const res = await fetch(`https://${cfg.jiraSite}/rest/api/3/search/jql`, {
     method: "POST",
-    headers: {
-      Authorization: `Basic ${auth}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-    },
+    headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ jql, fields: ["summary", "status", "labels", "assignee"], maxResults: 50 }),
   });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Jira ${res.status}: ${txt.slice(0, 300)}`);
-  }
+  if (!res.ok) throw new Error(`Jira ${res.status}: ${(await res.text()).slice(0, 300)}`);
   return res.json();
 }
-
-// 범용 Jira REST 요청(인증 + 에러 처리). jiraSearch 와 동일 자격증명 사용.
-async function jiraReq(method, urlPath, body) {
-  const cfg = getConfig();
-  const cred = getCreds();
-  if (!cred.atlassianEmail || !cred.atlassianToken) throw new Error("Atlassian 이메일/토큰이 설정되지 않았습니다.");
+async function jiraReq(method, urlPath, body, cfg, cred) {
+  const auth = jiraAuth(cred);
   if (!cfg.jiraSite) throw new Error("Jira 사이트가 설정되지 않았습니다.");
-  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
   const res = await fetch(`https://${cfg.jiraSite}${urlPath}`, {
     method,
     headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json", Accept: "application/json" },
@@ -254,31 +281,21 @@ async function jiraReq(method, urlPath, body) {
   if (!res.ok) throw new Error(`Jira ${res.status}: ${txt.slice(0, 400)}`);
   return txt ? JSON.parse(txt) : {};
 }
-
-// Jira 이슈에 파일(이미지) 첨부. base64(data URL 허용) → multipart 업로드.
-async function jiraAttach(issueKey, filename, dataBase64, contentType) {
-  const cfg = getConfig();
-  const cred = getCreds();
-  if (!cred.atlassianEmail || !cred.atlassianToken) throw new Error("Atlassian 자격증명 없음");
-  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
+async function jiraAttach(issueKey, filename, dataBase64, contentType, cfg, cred) {
+  const auth = jiraAuth(cred);
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ""), "base64");
   const form = new FormData();
   form.append("file", new Blob([buf], { type: contentType || "application/octet-stream" }), filename || "attachment");
   const res = await fetch(`https://${cfg.jiraSite}/rest/api/3/issue/${encodeURIComponent(issueKey)}/attachments`, {
-    method: "POST",
-    headers: { Authorization: `Basic ${auth}`, "X-Atlassian-Token": "no-check" }, // 멀티파트 Content-Type 은 fetch 가 자동 설정
-    body: form,
+    method: "POST", headers: { Authorization: `Basic ${auth}`, "X-Atlassian-Token": "no-check" }, body: form,
   });
   const txt = await res.text();
   if (!res.ok) throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
 }
-
-// claude CLI 헤드리스 실행(설명 정리 등). ANTHROPIC_API_KEY 있으면 주입, 없으면 로컬 로그인.
-function runClaude(prompt, timeoutMs = 120000) {
+function runClaude(prompt, cred, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
-    const cred = getCreds();
     const env = { ...process.env };
-    if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
+    if (cred && cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
     let child;
     try { child = spawn("claude", ["-p", prompt], { env }); }
     catch (e) { return reject(new Error("claude 실행 실패: " + e.message)); }
@@ -287,15 +304,11 @@ function runClaude(prompt, timeoutMs = 120000) {
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (err += d));
     child.on("error", (e) => { clearTimeout(timer); reject(new Error("claude 실행 실패(설치/PATH 확인): " + e.message)); });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) resolve(out.trim());
-      else reject(new Error(`claude 종료 코드 ${code}: ${err.slice(0, 300)}`));
-    });
+    child.on("close", (code) => { clearTimeout(timer); code === 0 ? resolve(out.trim()) : reject(new Error(`claude 종료 코드 ${code}: ${err.slice(0, 300)}`)); });
   });
 }
 
-// ADF(Atlassian Document Format) → 읽기용 평문. 설명·코멘트 표시에 사용.
+// ----- ADF 헬퍼 -----
 function adfToText(node) {
   if (!node) return "";
   if (Array.isArray(node)) return node.map(adfToText).join("");
@@ -305,25 +318,17 @@ function adfToText(node) {
   if (node.type === "emoji") return (node.attrs && (node.attrs.shortName || node.attrs.text)) || "";
   const inner = node.content ? adfToText(node.content) : "";
   if (node.type === "listItem") return "• " + inner.replace(/\n+$/, "") + "\n";
-  if (node.type === "blockquote") {
-    const t = inner.replace(/\n+$/, "");
-    return t.split("\n").map((l) => "> " + l).join("\n") + "\n"; // 인용(답글) 표시
-  }
-  const blocks = ["paragraph", "heading", "codeBlock", "rule", "panel"];
-  if (blocks.indexOf(node.type) !== -1) return inner + "\n";
+  if (node.type === "blockquote") { const t = inner.replace(/\n+$/, ""); return t.split("\n").map((l) => "> " + l).join("\n") + "\n"; }
+  if (["paragraph", "heading", "codeBlock", "rule", "panel"].indexOf(node.type) !== -1) return inner + "\n";
   return inner;
 }
-
-// 답글 ADF: 원 코멘트 인용(blockquote) + 작성자 @멘션 + 답변 본문.
-// Jira 코멘트는 스레드를 지원하지 않으므로 인용+멘션으로 "대댓글"을 표현한다.
 function buildReplyADF(body, replyTo) {
   const content = [];
   if (replyTo && replyTo.snippet) {
     const q = String(replyTo.snippet).split("\n").map((ln) => ({ type: "paragraph", content: ln ? [{ type: "text", text: ln }] : [] }));
     content.push({ type: "blockquote", content: q.length ? q : [{ type: "paragraph", content: [] }] });
   }
-  const lines = String(body).split("\n");
-  lines.forEach((ln, idx) => {
+  String(body).split("\n").forEach((ln, idx) => {
     const para = { type: "paragraph", content: [] };
     if (idx === 0 && replyTo && replyTo.accountId) {
       para.content.push({ type: "mention", attrs: { id: replyTo.accountId, text: "@" + (replyTo.author || "user") } });
@@ -335,92 +340,70 @@ function buildReplyADF(body, replyTo) {
   if (content.length === 0) content.push({ type: "paragraph", content: [] });
   return { type: "doc", version: 1, content };
 }
-
-// 평문 설명 → Atlassian Document Format(ADF) 변환(REST v3 description 필드용)
 function toADF(text) {
-  const lines = String(text).split("\n");
-  return {
-    type: "doc",
-    version: 1,
-    content: lines.map((ln) => ({ type: "paragraph", content: ln ? [{ type: "text", text: ln }] : [] })),
-  };
+  return { type: "doc", version: 1, content: String(text).split("\n").map((ln) => ({ type: "paragraph", content: ln ? [{ type: "text", text: ln }] : [] })) };
 }
-
-// 트리거 판정 절(label 모드 권장, text 모드는 레거시)
 function triggerClause(cfg) {
-  return cfg.triggerMode === "text"
-    ? `text ~ "${cfg.triggerText}"`
-    : `labels = "${cfg.triggerLabel}"`;
+  return cfg.triggerMode === "text" ? `text ~ "${cfg.triggerText}"` : `labels = "${cfg.triggerLabel}"`;
 }
-
-// detect-cards.sh 와 동일한 JQL 을 구성(REST 결정적 탐지용)
 function detectJql(mode, cfg) {
   const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
   const failed = ` AND (labels != "${cfg.failedLabel}" OR labels IS EMPTY)`;
   const base = `assignee = currentUser() AND status != "${cfg.doneStatus}" AND ${triggerClause(cfg)}`;
-  if (mode === "plan") {
-    return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
-  }
+  if (mode === "plan") return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
   return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}"${failed}${proj}`;
 }
+const fail = (res, e) => res.status(e && e.code === 404 ? 404 : 500).json({ ok: false, message: String((e && e.message) || e) });
 
 // =============================== API ROUTES ==================================
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
-app.get("/api/config", (req, res) => res.json(getConfig()));
-app.post("/api/config", (req, res) => {
-  const merged = { ...getConfig(), ...(req.body || {}) };
-  writeJson(CONFIG_PATH, merged);
-  res.json({ ok: true, config: merged });
+// ----- 프로젝트 관리 -----
+app.get("/api/projects", (req, res) => res.json({ ok: true, projects: listProjects(), defaultId: defaultProjectId() }));
+app.post("/api/projects", (req, res) => {
+  const saved = saveProject(req.body || {});
+  res.json({ ok: true, project: saved });
 });
-
-// 자격증명: GET 은 값 노출 없이 설정 여부만 반환
-app.get("/api/credentials", (req, res) => {
-  const c = getCreds();
-  res.json({
-    anthropicApiKey: !!c.anthropicApiKey,
-    githubToken: !!c.githubToken,
-    atlassianEmail: c.atlassianEmail || "",
-    atlassianToken: !!c.atlassianToken,
-    slackWebhookUrl: !!c.slackWebhookUrl,
-  });
+app.delete("/api/projects/:id", (req, res) => { removeProject(req.params.id); res.json({ ok: true }); });
+app.get("/api/projects/:id/credentials", (req, res) => {
+  if (!getProject(req.params.id)) return res.status(404).json({ ok: false, message: "프로젝트 없음" });
+  res.json(maskCreds(getProjectCreds(req.params.id)));
 });
-app.post("/api/credentials", (req, res) => {
-  const cur = getCreds();
-  const b = req.body || {};
-  // 빈 문자열로 덮어쓰지 않도록(마스킹된 필드 유지). 명시적으로 지우려면 "__CLEAR__".
-  const apply = (k) => {
-    if (b[k] === undefined) return cur[k];
-    if (b[k] === "__CLEAR__") return "";
-    if (b[k] === "") return cur[k];
-    return b[k];
-  };
-  const next = {
-    anthropicApiKey: apply("anthropicApiKey"),
-    githubToken: apply("githubToken"),
-    atlassianEmail: b.atlassianEmail !== undefined ? b.atlassianEmail : cur.atlassianEmail,
-    atlassianToken: apply("atlassianToken"),
-    slackWebhookUrl: apply("slackWebhookUrl"),
-  };
-  writeJson(CRED_PATH, next, 0o600);
+app.post("/api/projects/:id/credentials", (req, res) => {
+  if (!getProject(req.params.id)) return res.status(404).json({ ok: false, message: "프로젝트 없음" });
+  setProjectCreds(req.params.id, applyCreds(getProjectCreds(req.params.id), req.body || {}));
   res.json({ ok: true });
 });
 
+// ----- 레거시 호환: 첫 프로젝트 대상 (기존 단일 프로젝트 UI 유지) -----
+app.get("/api/config", (req, res) => res.json(getConfig()));
+app.post("/api/config", (req, res) => {
+  const id = defaultProjectId();
+  const body = req.body || {};
+  const saved = id ? saveProject({ ...body, id }) : saveProject({ name: body.projectKey || "기본 프로젝트", ...body });
+  res.json({ ok: true, config: saved });
+});
+app.get("/api/credentials", (req, res) => res.json(maskCreds(getCreds())));
+app.post("/api/credentials", (req, res) => {
+  const id = defaultProjectId();
+  if (!id) return res.status(400).json({ ok: false, message: "프로젝트를 먼저 등록하세요." });
+  setProjectCreds(id, applyCreds(getProjectCreds(id), req.body || {}));
+  res.json({ ok: true });
+});
+
+// ----- 루프 제어 -----
 app.get("/api/loops/status", (req, res) => res.json(loopStatus()));
 app.post("/api/loops/:type/start", (req, res) => {
-  const { type } = req.params;
-  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
-  res.json(startLoop(type));
+  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  res.json(startLoop(req.params.type));
 });
 app.post("/api/loops/:type/stop", (req, res) => {
-  const { type } = req.params;
-  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
-  res.json(stopLoop(type));
+  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  res.json(stopLoop(req.params.type));
 });
 app.post("/api/loops/:type/run-once", (req, res) => {
-  const { type } = req.params;
-  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
-  res.json(runOnce(type));
+  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  res.json(runOnce(req.params.type));
 });
 
 // 특정 카드 1건 즉시 실행
@@ -429,97 +412,78 @@ app.post("/api/cards/:key/run", (req, res) => {
   const phase = (req.body || {}).phase;
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
   if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build" });
-  res.json(runCard(key, phase, new Date().toISOString()));
+  try { const { id } = resolveProject(req); res.json(runCard(key, phase, new Date().toISOString(), id)); }
+  catch (e) { fail(res, e); }
 });
 
-// REST 기반 결정적 탐지 (루프가 claude 탐지 대신 우선 사용; 실패 시 claude 폴백)
+// REST 탐지
 app.get("/api/detect/:mode", async (req, res) => {
-  const { mode } = req.params;
-  if (!["plan", "build"].includes(mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
+  if (!["plan", "build"].includes(req.params.mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
   try {
-    const data = await jiraSearch(detectJql(mode, getConfig()));
-    res.json({ ok: true, mode, keys: (data.issues || []).map((i) => i.key) });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+    const { cfg, cred } = resolveProject(req);
+    const data = await jiraSearch(detectJql(req.params.mode, cfg), cfg, cred);
+    res.json({ ok: true, mode: req.params.mode, keys: (data.issues || []).map((i) => i.key) });
+  } catch (e) { fail(res, e); }
 });
 
+// 로그
 app.get("/api/logs/:type", (req, res) => {
-  const { type } = req.params;
-  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   const lines = Math.min(parseInt(req.query.lines || "200", 10), 2000);
-  const logPath = path.join(SCRIPTS_DIR, `loop-${type}.log`);
+  const logPath = path.join(SCRIPTS_DIR, `loop-${req.params.type}.log`);
   if (!fs.existsSync(logPath)) return res.json({ log: "(로그 파일 없음 — 아직 실행 전)" });
-  const content = fs.readFileSync(logPath, "utf8").split("\n");
-  res.json({ log: content.slice(-lines).join("\n") });
+  res.json({ log: fs.readFileSync(logPath, "utf8").split("\n").slice(-lines).join("\n") });
 });
-
-// 로그 비우기(truncate). 루프가 돌고 있어도 다음 출력부터 새로 쌓인다.
 app.post("/api/logs/:type/clear", (req, res) => {
-  const { type } = req.params;
-  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
-  const logPath = path.join(SCRIPTS_DIR, `loop-${type}.log`);
-  try {
-    fs.writeFileSync(logPath, "");
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  try { fs.writeFileSync(path.join(SCRIPTS_DIR, `loop-${req.params.type}.log`), ""); res.json({ ok: true }); }
+  catch (e) { fail(res, e); }
 });
 
+// 카드 상태
 app.get("/api/cards", async (req, res) => {
   try {
-    const cfg = getConfig();
+    const { cfg, cred } = resolveProject(req);
     const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
-    const base = `assignee = currentUser() AND ${triggerClause(cfg)}${proj}`;
-    const data = await jiraSearch(`${base} ORDER BY key ASC`);
-    const issues = (data.issues || []).map((i) => ({
-      key: i.key,
-      summary: i.fields.summary,
-      status: i.fields.status?.name,
-      labels: i.fields.labels || [],
-      url: `https://${cfg.jiraSite}/browse/${i.key}`,
-    }));
-    // 단계 분류
+    const data = await jiraSearch(`assignee = currentUser() AND ${triggerClause(cfg)}${proj} ORDER BY key ASC`, cfg, cred);
     const classify = (it) => {
       if (it.status === cfg.doneStatus) return "done";
       if (it.labels.includes(cfg.failedLabel)) return "failed";
-      const planned = it.labels.includes(cfg.plannedLabel);
-      const answered = it.labels.includes(cfg.answeredLabel);
-      if (planned && answered) return "build-ready";   // 라벨 게이트 통과(실제 답변은 build 단계에서 재확인)
-      if (planned) return "awaiting-answer";           // plan 완료, claude-answered 라벨 대기
+      const planned = it.labels.includes(cfg.plannedLabel), answered = it.labels.includes(cfg.answeredLabel);
+      if (planned && answered) return "build-ready";
+      if (planned) return "awaiting-answer";
       return "plan-ready";
     };
-    res.json({ ok: true, issues: issues.map((it) => ({ ...it, stage: classify(it) })) });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+    const issues = (data.issues || []).map((i) => {
+      const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}` };
+      return { ...it, stage: classify(it) };
+    });
+    res.json({ ok: true, issues });
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드 등록: 메타(이슈 타입 + 에픽 목록) -----
+// 카드 등록 메타
 app.get("/api/jira/meta", async (req, res) => {
   try {
-    const cfg = getConfig();
+    const { cfg, cred } = resolveProject(req);
     if (!cfg.projectKey) throw new Error("프로젝트 키가 설정되지 않았습니다.");
-    const proj = await jiraReq("GET", `/rest/api/3/project/${encodeURIComponent(cfg.projectKey)}`);
+    const proj = await jiraReq("GET", `/rest/api/3/project/${encodeURIComponent(cfg.projectKey)}`, null, cfg, cred);
     const issueTypes = (proj.issueTypes || []).map((t) => ({ id: t.id, name: t.name, subtask: !!t.subtask, hierarchyLevel: t.hierarchyLevel }));
     let epics = [];
     try {
-      const data = await jiraSearch(`project = "${cfg.projectKey}" AND issuetype = Epic ORDER BY created DESC`);
+      const data = await jiraSearch(`project = "${cfg.projectKey}" AND issuetype = Epic ORDER BY created DESC`, cfg, cred);
       epics = (data.issues || []).map((i) => ({ key: i.key, summary: i.fields.summary }));
-    } catch { /* 에픽 없음/권한 등은 무시 */ }
+    } catch {}
     res.json({ ok: true, projectKey: cfg.projectKey, issueTypes, epics });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드 등록: 러프 설명 → Claude 가 체계적 설명으로 변환 -----
+// 러프 설명 → Claude 정리
 app.post("/api/ai/refine-description", async (req, res) => {
   try {
+    const { cred } = resolveProject(req);
     const b = req.body || {};
     const text = String(b.text || "").trim();
-    const summary = String(b.summary || "").trim();
     if (!text) throw new Error("변환할 설명을 입력하세요.");
     const prompt = `다음은 작성자가 러프하게 적은 Jira 작업 설명입니다. 개발 담당자가 보기 좋은 체계적인 한국어 설명으로 정리하세요.
 
@@ -528,198 +492,140 @@ app.post("/api/ai/refine-description", async (req, res) => {
 - 다음 구조를 사용하세요: "## 배경/목적", "## 요구사항"(번호 목록), "## 완료 조건"(- [ ] 체크리스트).
 - 결과 본문(마크다운)만 출력하세요. 머리말·맺음말·설명 등 본문 외 텍스트는 절대 출력하지 마세요.
 
-[제목] ${summary || "(없음)"}
+[제목] ${String(b.summary || "").trim() || "(없음)"}
 [러프 설명]
 ${text}`;
-    const refined = await runClaude(prompt);
+    const refined = await runClaude(prompt, cred);
     if (!refined) throw new Error("변환 결과가 비어 있습니다.");
     res.json({ ok: true, description: refined });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드 등록: 생성 -----
+// 카드 생성
 app.post("/api/jira/issue", async (req, res) => {
   try {
-    const cfg = getConfig();
+    const { cfg, cred } = resolveProject(req);
     if (!cfg.projectKey) throw new Error("프로젝트 키가 설정되지 않았습니다.");
     const b = req.body || {};
     const summary = String(b.summary || "").trim();
     if (!summary) throw new Error("요약(summary)은 필수입니다.");
-    const fields = {
-      project: { key: cfg.projectKey },
-      issuetype: { name: b.issueType || "Task" },
-      summary,
-    };
+    const fields = { project: { key: cfg.projectKey }, issuetype: { name: b.issueType || "Task" }, summary };
     if (b.description) fields.description = toADF(b.description);
     const parentKey = String(b.parentKey || "").trim();
     if (parentKey) {
-      // 계층 검증: 상위는 자식보다 정확히 한 단계 위여야 함(에픽>작업>하위작업).
-      // 안 맞으면 Jira 의 모호한 메시지 대신 실행 가능한 안내를 준다.
       try {
-        const parent = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(parentKey)}?fields=issuetype`);
-        const proj2 = await jiraReq("GET", `/rest/api/3/project/${encodeURIComponent(cfg.projectKey)}`);
+        const parent = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(parentKey)}?fields=issuetype`, null, cfg, cred);
+        const proj2 = await jiraReq("GET", `/rest/api/3/project/${encodeURIComponent(cfg.projectKey)}`, null, cfg, cred);
         const pType = parent.fields && parent.fields.issuetype;
         const cType = (proj2.issueTypes || []).find((t) => t.name === fields.issuetype.name);
-        const pLv = pType && pType.hierarchyLevel;
-        const cLv = cType && cType.hierarchyLevel;
+        const pLv = pType && pType.hierarchyLevel, cLv = cType && cType.hierarchyLevel;
         if (pLv != null && cLv != null && pLv !== cLv + 1) {
           const sub = (proj2.issueTypes || []).find((t) => t.subtask);
           let hint;
-          if (cLv === 0 && pLv === 0) {
-            hint = `'${pType.name}'(${parentKey})은 '${fields.issuetype.name}'과 같은 계층이라 상위가 될 수 없습니다. `
-              + `이 카드를 ${parentKey} 하위에 두려면 이슈 타입을 '${sub ? sub.name : "하위 작업"}'(Subtask)으로 선택하세요. `
-              + `또는 상위에 에픽 키를 지정하세요.`;
-          } else {
-            hint = `이슈 타입 '${fields.issuetype.name}'(레벨 ${cLv})과 상위 ${parentKey}(${pType.name}, 레벨 ${pLv})의 계층이 맞지 않습니다. `
-              + `상위는 자식보다 한 단계 위여야 합니다(에픽 > 작업/스토리 > 하위작업).`;
-          }
+          if (cLv === 0 && pLv === 0) hint = `'${pType.name}'(${parentKey})은 '${fields.issuetype.name}'과 같은 계층이라 상위가 될 수 없습니다. 이 카드를 ${parentKey} 하위에 두려면 이슈 타입을 '${sub ? sub.name : "하위 작업"}'(Subtask)으로 선택하세요. 또는 상위에 에픽 키를 지정하세요.`;
+          else hint = `이슈 타입 '${fields.issuetype.name}'(레벨 ${cLv})과 상위 ${parentKey}(${pType.name}, 레벨 ${pLv})의 계층이 맞지 않습니다. 상위는 자식보다 한 단계 위여야 합니다(에픽 > 작업/스토리 > 하위작업).`;
           throw new Error(hint);
         }
-      } catch (e) {
-        // 검증 호출 자체 실패(권한 등)는 무시하고 그대로 시도하되, 계층 안내 에러는 그대로 전달
-        if (/계층|상위가 될 수 없|하위 작업/.test(String(e.message))) throw e;
-      }
+      } catch (e) { if (/계층|상위가 될 수 없|하위 작업/.test(String(e.message))) throw e; }
       fields.parent = { key: parentKey };
     }
     if (b.addTriggerLabel) fields.labels = [cfg.triggerLabel || "claude-work"];
-    if (b.assignSelf) {
-      const me = await jiraReq("GET", "/rest/api/3/myself");
-      if (me.accountId) fields.assignee = { accountId: me.accountId };
-    }
-    const created = await jiraReq("POST", "/rest/api/3/issue", { fields });
-    // 이미지 등 첨부(있으면 생성 직후 업로드)
+    if (b.assignSelf) { const me = await jiraReq("GET", "/rest/api/3/myself", null, cfg, cred); if (me.accountId) fields.assignee = { accountId: me.accountId }; }
+    const created = await jiraReq("POST", "/rest/api/3/issue", { fields }, cfg, cred);
     const atts = Array.isArray(b.attachments) ? b.attachments : [];
     const attached = [], attachErrors = [];
     for (const a of atts) {
-      try { await jiraAttach(created.key, a.filename, a.dataBase64, a.contentType); attached.push(a.filename || "file"); }
+      try { await jiraAttach(created.key, a.filename, a.dataBase64, a.contentType, cfg, cred); attached.push(a.filename || "file"); }
       catch (e) { attachErrors.push(`${a.filename || "file"}: ${e.message}`); }
     }
     res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}`, attached, attachErrors });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드별 claude 상세 실행 로그(도구 호출/메시지/결과) -----
+// 카드별 claude 실행 로그
 app.get("/api/claude-log/:key/:phase", (req, res) => {
   const { key, phase } = req.params;
   if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 오류" });
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "키 형식 오류" });
-  const cfg = getConfig();
-  const p = path.join(cfg.workDir || SCRIPTS_DIR, "claude-logs", `${key}-${phase}.log`);
-  if (!fs.existsSync(p)) return res.json({ ok: true, log: "(아직 claude 실행 로그가 없습니다)" });
-  const lines = Math.min(parseInt(req.query.lines || "500", 10), 5000);
-  const content = fs.readFileSync(p, "utf8").split("\n");
-  res.json({ ok: true, log: content.slice(-lines).join("\n") });
+  try {
+    const { cfg } = resolveProject(req);
+    const p = path.join(cfg.workDir || SCRIPTS_DIR, "claude-logs", `${key}-${phase}.log`);
+    if (!fs.existsSync(p)) return res.json({ ok: true, log: "(아직 claude 실행 로그가 없습니다)" });
+    const lines = Math.min(parseInt(req.query.lines || "500", 10), 5000);
+    res.json({ ok: true, log: fs.readFileSync(p, "utf8").split("\n").slice(-lines).join("\n") });
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드 상세: 원문 설명 + 코멘트 -----
+// 카드 상세
 app.get("/api/jira/issue/:key", async (req, res) => {
   try {
-    const cfg = getConfig();
+    const { cfg, cred } = resolveProject(req);
     const key = req.params.key;
-    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels`);
-    const cs = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/comment?maxResults=50`);
-    const comments = (cs.comments || []).map((c) => ({
-      id: c.id,
-      author: (c.author && c.author.displayName) || "?",
-      accountId: c.author && c.author.accountId,
-      created: c.created,
-      body: adfToText(c.body),
-    }));
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels`, null, cfg, cred);
+    const cs = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/comment?maxResults=50`, null, cfg, cred);
+    const comments = (cs.comments || []).map((c) => ({ id: c.id, author: (c.author && c.author.displayName) || "?", accountId: c.author && c.author.accountId, created: c.created, body: adfToText(c.body) }));
     res.json({
       ok: true, key,
       summary: issue.fields && issue.fields.summary,
       status: issue.fields && issue.fields.status && issue.fields.status.name,
       labels: (issue.fields && issue.fields.labels) || [],
       description: adfToText(issue.fields && issue.fields.description),
-      comments,
-      url: `https://${cfg.jiraSite}/browse/${key}`,
+      comments, url: `https://${cfg.jiraSite}/browse/${key}`,
     });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 카드 상세: 답변(코멘트) 작성, 선택 시 claude-answered 라벨 추가 -----
+// 답변 코멘트
 app.post("/api/jira/issue/:key/comment", async (req, res) => {
   try {
-    const cfg = getConfig();
+    const { cfg, cred } = resolveProject(req);
     const key = req.params.key;
     const body = String((req.body || {}).body || "").trim();
     if (!body) throw new Error("답변 내용을 입력하세요.");
     const replyTo = (req.body || {}).replyTo;
-    const adf = replyTo ? buildReplyADF(body, replyTo) : toADF(body);
-    await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/comment`, { body: adf });
+    await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/comment`, { body: replyTo ? buildReplyADF(body, replyTo) : toADF(body) }, cfg, cred);
     if ((req.body || {}).markAnswered) {
-      const label = cfg.answeredLabel || "claude-answered";
-      await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ add: label }] } });
+      await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ add: cfg.answeredLabel || "claude-answered" }] } }, cfg, cred);
     }
     res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 처리 이력 -----
+// 처리 이력 (?project 로 필터 가능)
 app.get("/api/history", (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || "100", 10), 1000);
+  const filter = req.query.project;
   if (!fs.existsSync(HISTORY_PATH)) return res.json({ ok: true, entries: [] });
-  const lines = fs.readFileSync(HISTORY_PATH, "utf8").split("\n").filter(Boolean);
   const entries = [];
-  for (const ln of lines) {
-    try { entries.push(JSON.parse(ln)); } catch {} // 깨진 줄은 건너뜀
+  for (const ln of fs.readFileSync(HISTORY_PATH, "utf8").split("\n").filter(Boolean)) {
+    try { const e = JSON.parse(ln); if (!filter || e.project === filter) entries.push(e); } catch {}
   }
-  res.json({ ok: true, entries: entries.reverse().slice(0, limit) }); // 최신순
+  res.json({ ok: true, entries: entries.reverse().slice(0, limit) });
 });
 
-// ----- work.env 모니터링/편집 -----
+// env (프로젝트별 경로)
 app.get("/api/env", (req, res) => {
-  const cfg = getConfig();
-  const p = cfg.envPath || path.join(cfg.workDir, "work.env");
   try {
-    if (!fs.existsSync(p)) {
-      return res.json({ ok: true, path: p, exists: false, content: "", mtime: null, lines: 0 });
-    }
+    const { cfg } = resolveProject(req);
+    const p = projectEnvPath(cfg);
+    if (!fs.existsSync(p)) return res.json({ ok: true, path: p, exists: false, content: "", mtime: null, lines: 0 });
     const content = fs.readFileSync(p, "utf8");
-    const stat = fs.statSync(p);
-    res.json({
-      ok: true,
-      path: p,
-      exists: true,
-      content,
-      mtime: stat.mtime.toISOString(),
-      lines: content.split("\n").length,
-    });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+    res.json({ ok: true, path: p, exists: true, content, mtime: fs.statSync(p).mtime.toISOString(), lines: content.split("\n").length });
+  } catch (e) { fail(res, e); }
 });
-
 app.post("/api/env", (req, res) => {
-  const cfg = getConfig();
-  const p = cfg.envPath || path.join(cfg.workDir, "work.env");
-  const content = (req.body && req.body.content != null) ? String(req.body.content) : "";
   try {
-    // 저장 전 기존 파일 백업(.bak)
-    if (fs.existsSync(p)) {
-      try { fs.copyFileSync(p, `${p}.bak`); } catch {}
-    }
+    const { cfg } = resolveProject(req);
+    const p = projectEnvPath(cfg);
+    const content = (req.body && req.body.content != null) ? String(req.body.content) : "";
+    if (fs.existsSync(p)) { try { fs.copyFileSync(p, `${p}.bak`); } catch {} }
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, content, { mode: 0o600 });
-    const stat = fs.statSync(p);
-    res.json({ ok: true, path: p, mtime: stat.mtime.toISOString() });
-  } catch (e) {
-    res.status(500).json({ ok: false, message: String(e.message || e) });
-  }
+    res.json({ ok: true, path: p, mtime: fs.statSync(p).mtime.toISOString() });
+  } catch (e) { fail(res, e); }
 });
 
-// ----- 라이브 리로드 (SSE + 파일 감시, 외부 의존성 없음) -----
-// 프론트 파일이 바뀌면 연결된 브라우저에 reload 이벤트를 보내 자동 새로고침한다.
-// 백엔드 재시작(nodemon 등) 시에도 SSE 가 끊겼다 재연결되며 브라우저가 새로고침된다.
-// 비활성화: DASHBOARD_NO_LIVERELOAD=1
+// ----- 라이브 리로드 (SSE + 파일 감시) -----
 const LIVERELOAD = process.env.DASHBOARD_NO_LIVERELOAD !== "1";
 const liveClients = new Set();
 if (LIVERELOAD) {
@@ -731,17 +637,9 @@ if (LIVERELOAD) {
     req.on("close", () => liveClients.delete(res));
   });
   let reloadTimer = null;
-  const broadcastReload = () => {
-    for (const c of liveClients) { try { c.write("data: reload\n\n"); } catch {} }
-  };
-  try {
-    fs.watch(path.join(ROOT, "public"), { recursive: true }, () => {
-      clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(broadcastReload, 100); // 연속 저장 디바운스
-    });
-  } catch (e) {
-    console.warn("  (livereload) 파일 감시 실패:", e.message);
-  }
+  const broadcastReload = () => { for (const c of liveClients) { try { c.write("data: reload\n\n"); } catch {} } };
+  try { fs.watch(path.join(ROOT, "public"), { recursive: true }, () => { clearTimeout(reloadTimer); reloadTimer = setTimeout(broadcastReload, 100); }); }
+  catch (e) { console.warn("  (livereload) 파일 감시 실패:", e.message); }
 }
 
 // 정적 프론트
@@ -750,10 +648,8 @@ app.use(express.static(path.join(ROOT, "public")));
 app.listen(PORT, () => {
   console.log(`\n  Jira→Claude 대시보드: http://localhost:${PORT}`);
   console.log(`  스크립트 위치: ${SCRIPTS_DIR}`);
-  // pidfile 로 살아있는 루프 복구 보고(백엔드 재시작 후 상태 일치)
+  console.log(`  프로젝트: ${listProjects().length}개`);
   const st = loopStatus();
-  for (const t of ["plan", "build"]) {
-    if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
-  }
+  for (const t of ["plan", "build"]) if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
   console.log("");
 });
