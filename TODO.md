@@ -53,10 +53,11 @@
   - AC: 설정한 웹훅으로 이벤트별 메시지 발송. 미설정 시 무시.
   - 영향: `run-jira-claude.sh` 또는 백엔드, 설정 추가
 
-- [ ] **7. 답변 감지 명시적 신호**
+- [x] **7. 답변 감지 명시적 신호**
   - 내용: "담당자 답변 여부"를 claude 판단에만 의존하지 않도록 명시적 신호 도입.
   - AC: 담당자가 다는 `claude-answered` 라벨 또는 "bot 질문 이후 담당자 코멘트 존재"를 build 진입 조건으로 사용.
   - 영향: `detect-cards.sh`(build JQL), `run-jira-claude.sh`
+  → (완료 2026-06-23) 이중 게이트로 구현: 둘 다 있어야 build 진입. ① 탐지 게이트 — build JQL/`/api/detect` 에 `labels = "claude-answered"` 추가, ② 실행 게이트 — build 프롬프트가 `claude-answered` 라벨 + 담당자 실제 답변 코멘트를 모두 확인(하나라도 없으면 SKIP). plan 프롬프트가 담당자에게 라벨 추가를 안내. server.js `answeredLabel` 주입, 대시보드 카드 단계에 `awaiting-answer`(+`failed`) 배지 추가. `ANSWERED_LABEL` 환경변수 추가.
 
 - [ ] **8. 루프 영속성·상태 일관성**
   - 내용: 재부팅/크래시 후 자동 재시작, 대시보드 상태와 실제 프로세스 일치.

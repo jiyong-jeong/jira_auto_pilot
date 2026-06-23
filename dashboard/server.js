@@ -31,6 +31,7 @@ const DEFAULT_CONFIG = {
   triggerText: "claude-work",
   doneStatus: "DEV COMPLETED",
   plannedLabel: "claude-planned",
+  answeredLabel: "claude-answered",             // 담당자 답변 완료 신호(build 진입 게이트)
   failedLabel: "claude-failed",                 // 반복 실패 카드 표시(탐지 제외)
   maxRetries: 3,                                // 연속 실패 N회 초과 시 실패 처리
   intervalSeconds: 3600,
@@ -76,6 +77,7 @@ function scriptEnv() {
   env.TRIGGER_TEXT = cfg.triggerText;
   env.DONE_STATUS = cfg.doneStatus;
   env.PLANNED_LABEL = cfg.plannedLabel;
+  env.ANSWERED_LABEL = cfg.answeredLabel || "claude-answered";
   env.FAILED_LABEL = cfg.failedLabel || "claude-failed";
   env.MAX_RETRIES = String(cfg.maxRetries || 3);
   env.PROJECT_KEY = cfg.projectKey || "";
@@ -168,7 +170,7 @@ function detectJql(mode, cfg) {
   if (mode === "plan") {
     return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
   }
-  return `${base} AND labels = "${cfg.plannedLabel}"${failed}${proj}`;
+  return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}"${failed}${proj}`;
 }
 
 // =============================== API ROUTES ==================================
@@ -261,7 +263,11 @@ app.get("/api/cards", async (req, res) => {
     // 단계 분류
     const classify = (it) => {
       if (it.status === cfg.doneStatus) return "done";
-      if (it.labels.includes(cfg.plannedLabel)) return "build-ready";
+      if (it.labels.includes(cfg.failedLabel)) return "failed";
+      const planned = it.labels.includes(cfg.plannedLabel);
+      const answered = it.labels.includes(cfg.answeredLabel);
+      if (planned && answered) return "build-ready";   // 라벨 게이트 통과(실제 답변은 build 단계에서 재확인)
+      if (planned) return "awaiting-answer";           // plan 완료, claude-answered 라벨 대기
       return "plan-ready";
     };
     res.json({ ok: true, issues: issues.map((it) => ({ ...it, stage: classify(it) })) });

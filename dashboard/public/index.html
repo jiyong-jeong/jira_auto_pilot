@@ -66,7 +66,9 @@ function Btn({ children, onClick, color = "indigo", disabled }) {
 
 const stageBadge = {
   "plan-ready": ["질문 대기(plan)", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
+  "awaiting-answer": ["답변 대기(claude-answered)", "bg-violet-500/20 text-violet-300 border-violet-500/40"],
   "build-ready": ["개발 대기(build)", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
+  "failed": ["실패(claude-failed)", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
   "done": ["완료(DEV COMPLETED)", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
 };
 

@@ -37,6 +37,7 @@ ASSIGNEE_NAME="${ASSIGNEE_NAME:-담당자}"
 TRIGGER_TEXT="${TRIGGER_TEXT:-claude-work}"
 DONE_STATUS="${DONE_STATUS:-DEV COMPLETED}"
 PLANNED_LABEL="${PLANNED_LABEL:-claude-planned}"
+ANSWERED_LABEL="${ANSWERED_LABEL:-claude-answered}"   # 담당자가 답변 완료를 알리는 명시 라벨(build 진입 게이트)
 FAILED_LABEL="${FAILED_LABEL:-claude-failed}"   # 반복 실패 카드 표시(탐지 제외)
 MAX_RETRIES="${MAX_RETRIES:-3}"                 # 연속 실패 N회 초과 시 실패 처리
 
@@ -134,7 +135,8 @@ if [[ "${PHASE}" == "plan" ]]; then
 - 아직 코드를 작성하지 마세요.
 - 구현 전에 명확히 해야 할 질문들을 정리해, Jira 이슈 ${ISSUE_KEY} 에 코멘트로 작성하세요.
   코멘트는 담당자(${ASSIGNEE_NAME})를 멘션하고, 답변하기 쉽게 번호를 매겨 질문하세요.
-- 질문이 없다면, '질문 없음 — 구현 준비 완료' 라는 코멘트를 남기세요.
+  코멘트 끝에 '답변을 마치신 뒤 이 이슈에 \"${ANSWERED_LABEL}\" 라벨을 추가해 주세요. (라벨이 있어야 자동 build 가 진행됩니다)' 안내를 포함하세요.
+- 질문이 없다면, '질문 없음 — 구현 준비 완료' 라는 코멘트를 남기고, 마찬가지로 담당자에게 '${ANSWERED_LABEL}' 라벨 추가를 요청하세요.
 - 코멘트 작성에 성공한 뒤, 이 이슈에 '${PLANNED_LABEL}' 라벨을 추가하세요.
   (이 라벨은 build 루프가 이 카드를 인식하고, plan 루프가 중복 처리하지 않도록 하는 표시입니다.)"
 else
@@ -156,9 +158,11 @@ else
   echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR"
   PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 를 ${REPO_NAME} 코드베이스에서 구현합니다. 작업 디렉토리는 현재 디렉토리입니다.
 
-1. Jira 이슈 ${ISSUE_KEY} 의 설명과 '모든 코멘트'(특히 담당자 ${ASSIGNEE_NAME} 의 답변)를 읽으세요.
-2. 담당자가 앞선 plan 단계 질문에 '아직 답변하지 않았다면', 어떤 코드 변경/커밋/PR도 하지 말고
+1. Jira 이슈 ${ISSUE_KEY} 의 설명과 '모든 코멘트'(특히 담당자 ${ASSIGNEE_NAME} 의 답변), 그리고 라벨을 읽으세요.
+2. build 진입 조건은 다음 '둘 다' 충족입니다. 둘 중 하나라도 없으면 어떤 코드 변경/커밋/PR도 하지 말고
    정확히 'SKIP: awaiting answers' 한 줄만 출력하고 종료하세요. (다음 주기에 다시 시도됩니다.)
+   (a) 이슈에 '${ANSWERED_LABEL}' 라벨이 붙어 있을 것 (담당자가 답변 완료를 명시한 신호).
+   (b) plan 단계의 bot 질문 코멘트 이후에 담당자 ${ASSIGNEE_NAME} 의 실제 답변 코멘트가 존재할 것.
 3. 답변이 있으면 그 내용을 반영해 요구된 작업을 구현하세요.
 4. 구현 후:
    - Jira 이슈 키를 반영한 새 git 브랜치를 만드세요 (예: feature/${ISSUE_KEY}-<짧은-설명>).
