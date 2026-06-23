@@ -327,6 +327,19 @@ app.get("/api/logs/:type", (req, res) => {
   res.json({ log: content.slice(-lines).join("\n") });
 });
 
+// 로그 비우기(truncate). 루프가 돌고 있어도 다음 출력부터 새로 쌓인다.
+app.post("/api/logs/:type/clear", (req, res) => {
+  const { type } = req.params;
+  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  const logPath = path.join(SCRIPTS_DIR, `loop-${type}.log`);
+  try {
+    fs.writeFileSync(logPath, "");
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: String(e.message || e) });
+  }
+});
+
 app.get("/api/cards", async (req, res) => {
   try {
     const cfg = getConfig();

@@ -153,6 +153,12 @@ function App() {
     const r = await api.get("/api/history?limit=100");
     if (r.ok) setHistory(r.entries || []);
   };
+  const clearLog = async (type) => {
+    if (!window.confirm(`loop-${type}.log 를 비울까요?`)) return;
+    const r = await api.post(`/api/logs/${type}/clear`);
+    if (r.ok) { setLogs((p) => ({ ...p, [type]: "" })); flash(`loop-${type}.log 비움`); }
+    else flash(r.message || "비우기 실패");
+  };
   const loadMeta = async () => {
     const r = await api.get("/api/jira/meta");
     if (r.ok) {
@@ -399,7 +405,13 @@ function App() {
         <div className="grid grid-cols-2 gap-4">
           {["plan", "build"].map((type) => (
             <div key={type}>
-              <div className="text-sm text-slate-400 mb-1">loop-{type}.log</div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm text-slate-400">loop-{type}.log</span>
+                <button onClick={() => clearLog(type)}
+                  className="text-xs text-slate-400 hover:text-rose-300 border border-slate-600 hover:border-rose-500/50 rounded px-2 py-0.5 transition">
+                  비우기
+                </button>
+              </div>
               <pre className="bg-black/60 border border-slate-700 rounded-lg p-3 text-xs h-64 overflow-auto whitespace-pre-wrap">{logs[type] || "(비어 있음)"}</pre>
             </div>
           ))}
