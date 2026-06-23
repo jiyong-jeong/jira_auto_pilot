@@ -16,6 +16,9 @@ kyb-api-*/
 # 처리 이력 (런타임 생성)
 history.jsonl
 
+# 루프 pidfile (런타임 생성)
+loop-*.pid
+
 # 의존성
 node_modules/
 

@@ -313,6 +313,15 @@ tail -f loop-plan.log loop-build.log
 권장 방식: 카드 본문에 작업 spec을 명확히 적고 **`claude-work` 라벨을 붙이면** 됩니다.
 (텍스트 검색은 토큰화로 오탐이 생길 수 있어 라벨 트리거가 기본입니다. 레거시 동작이 필요하면 `TRIGGER_MODE=text`.)
 
+### 7.4 운영(영속성·상태 일관성·자동 재시작)
+
+- **pidfile**: 루프를 시작하면 백엔드가 pid 를 `loop-<type>.pid` 에 기록합니다. 상태 조회(`/api/loops/status`)와 중지는 이 pidfile 을 단일 진실로 사용하므로, **백엔드를 재시작해도** 이미 떠 있는 루프를 정확히 인식하고(시작 로그에 "복구: …" 표시), 중지 버튼으로 프로세스 그룹째 종료할 수 있습니다. 크래시 등으로 죽은 경우 stale pidfile 은 자동 정리되어 "중지됨"으로 표시됩니다.
+- **루프는 detached**: `npm start`(백엔드)를 종료해도 루프는 독립 프로세스 그룹이라 계속 돕니다. 깔끔히 멈추려면 대시보드 중지를 쓰거나 `pkill -f loop-plan.sh; pkill -f loop-build.sh`.
+- **재부팅 후 자동 재시작**: 백엔드를 프로세스 매니저에 등록하면 됩니다.
+  - **pm2**: `cd dashboard && pm2 start server.js --name jira-claude-dashboard && pm2 save && pm2 startup`
+  - **launchd(macOS)**: `~/Library/LaunchAgents/com.jira-claude.dashboard.plist` 에 `ProgramArguments`로 `node <repo>/dashboard/server.js`, `RunAtLoad=true`, `KeepAlive=true` 를 지정하고 `launchctl load` 합니다.
+  - 백엔드가 다시 뜨면 pidfile 로 루프 상태를 복구하므로, 대시보드 상태가 실제 프로세스와 항상 일치합니다.
+
 ---
 
 ## 8. 인증 구조
@@ -345,6 +354,7 @@ loop-work/                     # (= 저장소 루트)
 ├─ repos/                      # 카드별 clone (gitignore)
 ├─ loop-*.log                  # 루프 로그 (gitignore)
 ├─ history.jsonl               # 처리 이력 JSONL (gitignore, 런타임 생성)
+├─ loop-*.pid                  # 루프 pidfile (gitignore, 런타임 생성)
 └─ dashboard/
    ├─ server.js                # Express 백엔드
    ├─ package.json
@@ -378,7 +388,7 @@ loop-work/                     # (= 저장소 루트)
 | 상태가 DEV COMPLETED로 안 바뀜 | 워크플로우에 해당 transition 없음 | Jira 워크플로우 확인, 로그의 사유 확인 |
 | 루프가 같은 카드 반복 처리 | plan 라벨/완료 상태 미반영 | 라벨/상태 전환이 됐는지 카드 확인 |
 | 카드에 `claude-failed` 라벨이 붙음 | 연속 `MAX_RETRIES`회 실패 | 카드 코멘트의 오류 요약 확인 후 수동 처리, 재시도하려면 라벨 제거 + `repos/.state/<KEY>.fail` 삭제 |
-| 대시보드 "중지됨"인데 실제 도는 중 | pid를 메모리에만 추적 | 백엔드 재시작 후 상태 갱신 |
+| 대시보드 "중지됨"인데 실제 도는 중 | (해결됨) pidfile 기반 추적 | 백엔드 재시작 시 pidfile 로 자동 복구됨. 그래도 안 맞으면 `loop-*.pid` 의 pid 생존 여부 확인 |
 
 ---
 
@@ -398,7 +408,7 @@ loop-work/                     # (= 저장소 루트)
 - ~~**탐지 효율**: detect를 claude 대신 백엔드 Jira REST로 전환(빠르고 결정적)~~ → ✅ 구현됨: `/api/detect/:mode` REST 엔드포인트 + detect-cards.sh 가 `DASHBOARD_URL` 있으면 REST 우선, claude 폴백 (4.2/4.4 참고).
 - ~~**답변 감지 명시 신호**: claude 판단 의존~~ → ✅ 구현됨: `claude-answered` 라벨(탐지 게이트) + 실제 답변 코멘트(실행 게이트) 이중 게이트, 카드 상태에 답변대기 단계 추가 (3/4.1/4.2 참고).
 - **알림**: PR/완료/실패 시 Slack·이메일 알림.
-- **영속성**: launchd/pm2로 재부팅 후 자동 재시작, pid를 디스크에 기록.
+- ~~**영속성**: launchd/pm2로 재부팅 후 자동 재시작, pid를 디스크에 기록~~ → ✅ 구현됨: pidfile(`loop-*.pid`) 기반 상태 추적·복구·stale 정리, launchd/pm2 가이드 (7.4 참고).
 - **병렬 상한**: 동시에 처리하는 카드 수 제한.
 - **PR 품질**: ✅ 핵심(테스트 있으면 통과까지 수정 후 PR, 없으면 빌드만) 구현됨 (4.1 PR 전 검증 참고). 남은 보강: 리뷰어·라벨 지정, Jira↔PR 양방향 링크.
 - ~~**처리 이력**: 처리 카드/시각/결과/PR URL 기록~~ → ✅ 구현됨: `run-jira-claude.sh` 가 매 실행 결과를 `history.jsonl` 에 기록, `/api/history` + 대시보드 이력 표로 확인 (4.5/4.4 참고).

@@ -67,8 +67,23 @@ function getCreds() {
   });
 }
 
-// ----- 실행 중인 루프 프로세스 추적 -----
-const loops = { plan: null, build: null }; // { proc, startedAt }
+// ----- 실행 중인 루프 프로세스 추적 (pidfile 기반: 백엔드 재시작 후에도 상태 일치) -----
+const loops = { plan: null, build: null }; // 메모리 핸들(있으면 사용): { proc }
+const pidFile = (type) => path.join(SCRIPTS_DIR, `loop-${type}.pid`);
+
+function readPid(type) {
+  try {
+    const pid = parseInt(fs.readFileSync(pidFile(type), "utf8").trim(), 10);
+    return Number.isInteger(pid) ? pid : null;
+  } catch { return null; }
+}
+function isAlive(pid) {
+  if (!pid) return false;
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+function clearPid(type) {
+  try { fs.unlinkSync(pidFile(type)); } catch {}
+}
 
 function scriptEnv() {
   const cfg = getConfig();
@@ -104,9 +119,11 @@ function scriptEnv() {
 }
 
 function startLoop(type) {
-  if (loops[type] && loops[type].proc && !loops[type].proc.killed) {
-    return { ok: false, message: `${type} 루프가 이미 실행 중입니다.` };
+  const existing = readPid(type);
+  if (isAlive(existing)) {
+    return { ok: false, message: `${type} 루프가 이미 실행 중입니다 (pid ${existing}).` };
   }
+  clearPid(type); // 죽은 프로세스의 잔여 pidfile 정리
   const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
   if (!fs.existsSync(script)) {
     return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
@@ -117,21 +134,29 @@ function startLoop(type) {
     detached: true,
     stdio: "ignore",
   });
-  loops[type] = { proc, startedAt: new Date().toISOString(), pid: proc.pid };
+  fs.writeFileSync(pidFile(type), String(proc.pid)); // 디스크에 pid 기록(재시작 후 복구용)
+  loops[type] = { proc };
   proc.on("exit", () => {
-    if (loops[type] && loops[type].pid === proc.pid) loops[type] = null;
+    if (loops[type] && loops[type].proc === proc) loops[type] = null;
+    if (readPid(type) === proc.pid) clearPid(type); // 스스로 종료 시 pidfile 정리
   });
+  proc.unref(); // 백엔드가 자식 때문에 이벤트 루프를 붙들지 않도록
   return { ok: true, pid: proc.pid };
 }
 
 function stopLoop(type) {
-  const entry = loops[type];
-  if (!entry || !entry.proc) return { ok: false, message: `${type} 루프가 실행 중이 아닙니다.` };
-  try {
-    process.kill(-entry.proc.pid, "SIGTERM"); // 프로세스 그룹 종료
-  } catch {
-    try { entry.proc.kill("SIGTERM"); } catch {}
+  const pid = readPid(type);
+  if (!isAlive(pid)) {
+    clearPid(type);
+    loops[type] = null;
+    return { ok: false, message: `${type} 루프가 실행 중이 아닙니다.` };
   }
+  try {
+    process.kill(-pid, "SIGTERM"); // 프로세스 그룹 종료(loop + run-jira-claude + claude 자식 포함)
+  } catch {
+    try { process.kill(pid, "SIGTERM"); } catch {}
+  }
+  clearPid(type);
   loops[type] = null;
   return { ok: true };
 }
@@ -139,10 +164,15 @@ function stopLoop(type) {
 function loopStatus() {
   const out = {};
   for (const t of ["plan", "build"]) {
-    const e = loops[t];
-    out[t] = e && e.proc && !e.proc.killed
-      ? { running: true, pid: e.pid, startedAt: e.startedAt }
-      : { running: false };
+    const pid = readPid(t);
+    if (isAlive(pid)) {
+      let startedAt = null;
+      try { startedAt = fs.statSync(pidFile(t)).mtime.toISOString(); } catch {}
+      out[t] = { running: true, pid, startedAt };
+    } else {
+      if (pid) clearPid(t); // stale pidfile 정리(크래시 등으로 죽은 경우)
+      out[t] = { running: false };
+    }
   }
   return out;
 }
@@ -351,5 +381,11 @@ app.use(express.static(path.join(ROOT, "public")));
 
 app.listen(PORT, () => {
   console.log(`\n  Jira→Claude 대시보드: http://localhost:${PORT}`);
-  console.log(`  스크립트 위치: ${SCRIPTS_DIR}\n`);
+  console.log(`  스크립트 위치: ${SCRIPTS_DIR}`);
+  // pidfile 로 살아있는 루프 복구 보고(백엔드 재시작 후 상태 일치)
+  const st = loopStatus();
+  for (const t of ["plan", "build"]) {
+    if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
+  }
+  console.log("");
 });

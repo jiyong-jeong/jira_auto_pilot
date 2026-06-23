@@ -59,10 +59,11 @@
   - 영향: `detect-cards.sh`(build JQL), `run-jira-claude.sh`
   → (완료 2026-06-23) 이중 게이트로 구현: 둘 다 있어야 build 진입. ① 탐지 게이트 — build JQL/`/api/detect` 에 `labels = "claude-answered"` 추가, ② 실행 게이트 — build 프롬프트가 `claude-answered` 라벨 + 담당자 실제 답변 코멘트를 모두 확인(하나라도 없으면 SKIP). plan 프롬프트가 담당자에게 라벨 추가를 안내. server.js `answeredLabel` 주입, 대시보드 카드 단계에 `awaiting-answer`(+`failed`) 배지 추가. `ANSWERED_LABEL` 환경변수 추가.
 
-- [ ] **8. 루프 영속성·상태 일관성**
+- [x] **8. 루프 영속성·상태 일관성**
   - 내용: 재부팅/크래시 후 자동 재시작, 대시보드 상태와 실제 프로세스 일치.
   - AC: launchd/pm2 등록 가이드 + pid를 디스크(pidfile)에 기록해 백엔드 재시작 후에도 상태 정확.
   - 영향: `dashboard/server.js`, 운영 문서
+  → (완료 2026-06-23) 루프 시작 시 `loop-<type>.pid` 에 pid 기록. status/stop 이 pidfile 을 단일 진실로 사용 → 백엔드 재시작 후 복구(시작 로그 보고), stale pidfile 자동 정리, stop 은 프로세스 그룹째 종료. DOCUMENTATION 7.4 에 launchd/pm2 자동 재시작 가이드 추가. `loop-*.pid` gitignore 등록.
 
 - [ ] **9. 병렬 처리 상한**
   - 내용: 매칭 카드가 많을 때 claude 프로세스 과다 생성 방지.
