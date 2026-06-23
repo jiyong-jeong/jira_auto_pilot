@@ -28,7 +28,9 @@ const DEFAULT_CONFIG = {
   projectKey: "",                               // 예: PROJ
   assigneeEmail: "",
   assigneeName: "",
-  triggerText: "claude-work",
+  triggerMode: "label",                         // label | text — 트리거 판정 방식(label 권장)
+  triggerLabel: "claude-work",                  // label 모드 트리거 라벨
+  triggerText: "claude-work",                   // text 모드(레거시) 트리거 텍스트
   doneStatus: "DEV COMPLETED",
   plannedLabel: "claude-planned",
   answeredLabel: "claude-answered",             // 담당자 답변 완료 신호(build 진입 게이트)
@@ -74,6 +76,8 @@ function scriptEnv() {
   env.BASE_BRANCH = cfg.baseBranch;
   env.ASSIGNEE_EMAIL = cfg.assigneeEmail;
   env.ASSIGNEE_NAME = cfg.assigneeName;
+  env.TRIGGER_MODE = cfg.triggerMode || "label";
+  env.TRIGGER_LABEL = cfg.triggerLabel || "claude-work";
   env.TRIGGER_TEXT = cfg.triggerText;
   env.DONE_STATUS = cfg.doneStatus;
   env.PLANNED_LABEL = cfg.plannedLabel;
@@ -162,11 +166,18 @@ async function jiraSearch(jql) {
   return res.json();
 }
 
+// 트리거 판정 절(label 모드 권장, text 모드는 레거시)
+function triggerClause(cfg) {
+  return cfg.triggerMode === "text"
+    ? `text ~ "${cfg.triggerText}"`
+    : `labels = "${cfg.triggerLabel}"`;
+}
+
 // detect-cards.sh 와 동일한 JQL 을 구성(REST 결정적 탐지용)
 function detectJql(mode, cfg) {
   const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
   const failed = ` AND (labels != "${cfg.failedLabel}" OR labels IS EMPTY)`;
-  const base = `assignee = currentUser() AND status != "${cfg.doneStatus}" AND text ~ "${cfg.triggerText}"`;
+  const base = `assignee = currentUser() AND status != "${cfg.doneStatus}" AND ${triggerClause(cfg)}`;
   if (mode === "plan") {
     return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
   }
@@ -251,7 +262,7 @@ app.get("/api/cards", async (req, res) => {
   try {
     const cfg = getConfig();
     const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
-    const base = `assignee = currentUser() AND text ~ "${cfg.triggerText}"${proj}`;
+    const base = `assignee = currentUser() AND ${triggerClause(cfg)}${proj}`;
     const data = await jiraSearch(`${base} ORDER BY key ASC`);
     const issues = (data.issues || []).map((i) => ({
       key: i.key,

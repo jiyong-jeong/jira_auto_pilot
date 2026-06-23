@@ -180,7 +180,19 @@ function App() {
           <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
           <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
           <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })} />
-          <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
+          <label className="block mb-3">
+            <span className="text-sm text-slate-400">트리거 방식</span>
+            <select
+              value={config.triggerMode || "label"}
+              onChange={(e) => setConfig({ ...config, triggerMode: e.target.value })}
+              className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+              <option value="label">라벨 (권장)</option>
+              <option value="text">텍스트 (레거시)</option>
+            </select>
+          </label>
+          {config.triggerMode === "text"
+            ? <Field label="트리거 텍스트 (text 모드)" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
+            : <Field label="트리거 라벨 (label 모드)" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work" />}
           <Field label="완료 상태명" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} />
           <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
           <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
@@ -223,7 +235,7 @@ function App() {
       <Section title="카드 상태" right={<Btn color="slate" onClick={loadCards}>조회</Btn>}>
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
         {cards.length === 0 ? (
-          <p className="text-slate-500 text-sm">조회 버튼을 눌러 {config.triggerText} 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
+          <p className="text-slate-500 text-sm">조회 버튼을 눌러 {config.triggerMode === "text" ? config.triggerText : config.triggerLabel} 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
         ) : (
           <table className="w-full text-sm">
             <thead><tr className="text-slate-400 text-left border-b border-slate-700">

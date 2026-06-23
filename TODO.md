@@ -83,10 +83,11 @@
   - AC: JSON 이력 파일 + 대시보드에 이력 표.
   - 영향: `dashboard/server.js`, `dashboard/public/index.html`
 
-- [ ] **12. 트리거 정밀도**
+- [x] **12. 트리거 정밀도**
   - 내용: `text ~ "claude-work"`의 토큰화 오탐 가능성 제거.
   - AC: 텍스트 대신 전용 라벨(예: `claude-work`)을 트리거로 사용하는 옵션 제공.
   - 영향: `detect-cards.sh`, 문서
+  → (완료 2026-06-23) `TRIGGER_MODE`(label|text, 기본 **label**) + `TRIGGER_LABEL`(기본 `claude-work`) 도입. detect-cards.sh/server.js JQL·/api/cards 가 모드별 트리거 절 사용, run-jira-claude.sh plan 조건/완료 요약(label 모드는 코멘트)도 모드 대응. 대시보드에 트리거 방식 선택 + 라벨 입력 추가. text 모드는 레거시로 유지.
 
 ---
 

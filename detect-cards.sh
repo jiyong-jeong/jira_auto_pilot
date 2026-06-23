@@ -19,7 +19,9 @@ set -uo pipefail
 
 MODE="${1:-plan}"
 DONE_STATUS="${DONE_STATUS:-DEV COMPLETED}"
-TRIGGER_TEXT="${TRIGGER_TEXT:-claude-work}"
+TRIGGER_MODE="${TRIGGER_MODE:-label}"          # label | text — 트리거 판정 방식
+TRIGGER_LABEL="${TRIGGER_LABEL:-claude-work}"  # label 모드 트리거 라벨
+TRIGGER_TEXT="${TRIGGER_TEXT:-claude-work}"    # text 모드(레거시) 트리거 텍스트
 PLANNED_LABEL="${PLANNED_LABEL:-claude-planned}"
 ANSWERED_LABEL="${ANSWERED_LABEL:-claude-answered}"   # build 진입 게이트(담당자 답변 완료 신호)
 FAILED_LABEL="${FAILED_LABEL:-claude-failed}"   # 반복 실패 카드는 탐지에서 제외
@@ -36,10 +38,15 @@ if [[ -n "${PROJECT_KEY}" ]]; then
 fi
 
 FAILED_FILTER=" AND (labels != \"${FAILED_LABEL}\" OR labels IS EMPTY)"
+if [[ "${TRIGGER_MODE}" == "text" ]]; then
+  TRIGGER_FILTER="text ~ \"${TRIGGER_TEXT}\""
+else
+  TRIGGER_FILTER="labels = \"${TRIGGER_LABEL}\""
+fi
 if [[ "${MODE}" == "plan" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${FAILED_FILTER}${PROJECT_FILTER}"
+  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND ${TRIGGER_FILTER} AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${FAILED_FILTER}${PROJECT_FILTER}"
 elif [[ "${MODE}" == "build" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND labels = \"${PLANNED_LABEL}\" AND labels = \"${ANSWERED_LABEL}\"${FAILED_FILTER}${PROJECT_FILTER}"
+  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND ${TRIGGER_FILTER} AND labels = \"${PLANNED_LABEL}\" AND labels = \"${ANSWERED_LABEL}\"${FAILED_FILTER}${PROJECT_FILTER}"
 else
   echo "Usage: $0 <plan|build>" >&2
   exit 1
