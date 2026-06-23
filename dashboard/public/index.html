@@ -253,6 +253,8 @@ function ProjectCard({ proj, onDeleted, flash }) {
             <option value="content">내용 직접 입력</option><option value="path">파일 경로 지정</option>
           </select>
         </label>
+        <Field label="복사 대상 경로 (repo 내 상대경로, 비우면 루트)" value={config.envDest} onChange={(v) => setConfig({ ...config, envDest: v })} placeholder="예: src/main/resources/application-private.properties"
+          info="env 파일을 clone 한 repo 의 이 경로로 복사합니다(상위 폴더 자동 생성, .git/info/exclude 로 커밋 차단). Spring Boot 면 src/main/resources/application-private.properties, Node 면 .env 처럼 프로젝트에 맞게 지정. 비우면 repo 루트에 원본 파일명으로 복사." />
         {config.envMode === "path" ? (
           <div>
             <Field label="사용할 .env 파일 경로 (그대로 복사)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="/abs/path/to/.env" />

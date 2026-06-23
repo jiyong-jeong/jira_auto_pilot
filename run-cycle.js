@@ -24,7 +24,7 @@ const readJson = (p, f) => { try { return JSON.parse(fs.readFileSync(p, "utf8"))
 const DEFAULTS = {
   workDir: SELF, baseBranch: "main", triggerMode: "label", triggerLabel: "claude-work", triggerText: "claude-work",
   doneStatus: "DEV COMPLETED", plannedLabel: "claude-planned", answeredLabel: "claude-answered", failedLabel: "claude-failed",
-  maxRetries: 3, maxParallel: 3, intervalSeconds: 3600, envMode: "content", envPath: "", cloneBase: path.join(SELF, "repos"),
+  maxRetries: 3, maxParallel: 3, intervalSeconds: 3600, envMode: "content", envPath: "", envDest: "", cloneBase: path.join(SELF, "repos"),
   testCmd: "", buildCmd: "", repoUrl: "", jiraSite: "", projectKey: "", assigneeEmail: "", assigneeName: "",
 };
 
@@ -50,6 +50,7 @@ function projectEnv(p, cred) {
   env.HISTORY_FILE = path.join(SELF, "history.jsonl");
   env.PROJECT_KEY = cfg.projectKey || "";
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir || SELF, `work-${cfg.id}.env`);
+  env.ENV_DEST_REL = cfg.envDest || "";
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir || SELF, "repos");
   if (cred && cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
   if (cred && cred.githubToken) { env.GH_TOKEN = cred.githubToken; env.GITHUB_TOKEN = cred.githubToken; }

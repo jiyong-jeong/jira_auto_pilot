@@ -30,6 +30,7 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${WORK_DIR:-${SELF_DIR}}"
 REPO_URL="${REPO_URL:-}"                       # 필수: 대상 GitHub repo URL
 ENV_SRC="${ENV_SRC:-${WORK_DIR}/work.env}"     # 대상 repo로 복사할 env 파일
+ENV_DEST_REL="${ENV_DEST_REL:-}"               # repo 내 복사 대상 상대경로(비우면 루트에 원본 파일명)
 CLONE_BASE="${CLONE_BASE:-${WORK_DIR}/repos}"  # clone 들이 모이는 베이스 폴더
 BASE_BRANCH="${BASE_BRANCH:-main}"
 ASSIGNEE_EMAIL="${ASSIGNEE_EMAIL:-}"
@@ -105,7 +106,14 @@ record_history() {
 
 # ===== 카드별 디렉토리 (병렬 실행용) =====
 REPO_DIR="${CLONE_BASE}/${REPO_NAME}-${ISSUE_KEY}"
-ENV_DEST="${REPO_DIR}/${ENV_NAME}"
+# env 복사 대상: ENV_DEST_REL 이 있으면 repo 내 해당 상대경로, 없으면 루트에 원본 파일명
+if [[ -n "${ENV_DEST_REL}" ]]; then
+  ENV_DEST="${REPO_DIR}/${ENV_DEST_REL}"
+  ENV_EXCLUDE="${ENV_DEST_REL}"
+else
+  ENV_DEST="${REPO_DIR}/${ENV_NAME}"
+  ENV_EXCLUDE="${ENV_NAME}"
+fi
 
 # ===== 필수 도구 확인 =====
 for cmd in git claude; do
@@ -150,17 +158,18 @@ git reset --hard "origin/${BASE_BRANCH}"
 
 # ===== 3) env 파일 복사 =====
 if [[ -f "${ENV_SRC}" ]]; then
+  mkdir -p "$(dirname "${ENV_DEST}")"   # 대상 경로(예: src/main/resources)의 상위 디렉토리 보장
   cp "${ENV_SRC}" "${ENV_DEST}"
   echo ">> [${ISSUE_KEY}] env 복사: ${ENV_SRC} -> ${ENV_DEST}"
-  # env 유출 방지: clone 의 .git/info/exclude 에 env 파일명을 등록해 추적/커밋을 구조적으로 차단
+  # env 유출 방지: clone 의 .git/info/exclude 에 대상 경로를 등록해 추적/커밋을 구조적으로 차단
   # (.gitignore 수정과 달리 repo 에 커밋되지 않는 로컬 전용 ignore). 프롬프트 의존 제거.
   EXCLUDE_FILE="${REPO_DIR}/.git/info/exclude"
-  for pat in "${ENV_NAME}" ".env"; do
+  for pat in "${ENV_EXCLUDE}" ".env"; do
     if [[ ! -f "${EXCLUDE_FILE}" ]] || ! grep -qxF "${pat}" "${EXCLUDE_FILE}"; then
       echo "${pat}" >> "${EXCLUDE_FILE}"
     fi
   done
-  echo ">> [${ISSUE_KEY}] .git/info/exclude 에 env 패턴 등록(${ENV_NAME}, .env)"
+  echo ">> [${ISSUE_KEY}] .git/info/exclude 에 env 패턴 등록(${ENV_EXCLUDE}, .env)"
 else
   echo ">> [${ISSUE_KEY}] WARN: env 파일 없음: ${ENV_SRC} (건너뜀)"
 fi

@@ -44,6 +44,7 @@ const DEFAULT_CONFIG = {
   intervalSeconds: 3600,
   envMode: "content",
   envPath: "",                                  // 비우면 <workDir>/work-<id>.env 사용
+  envDest: "",                                  // repo 내 복사 대상 상대경로(비우면 루트). 예: src/main/resources/application-private.properties
   cloneBase: path.join(SCRIPTS_DIR, "repos"),
 };
 
@@ -113,6 +114,7 @@ function scriptEnv(id) {
   env.HISTORY_FILE = HISTORY_PATH;
   env.PROJECT_KEY = cfg.projectKey || "";
   env.ENV_SRC = projectEnvPath(cfg);
+  env.ENV_DEST_REL = cfg.envDest || "";
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
   env.LOOP_INTERVAL = String(cfg.intervalSeconds || 3600);
   env.MAX_PARALLEL = String(cfg.maxParallel || 3);
