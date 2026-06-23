@@ -38,10 +38,11 @@
   - 영향: `run-jira-claude.sh`
   → (완료 2026-06-23) env 복사 직후 `.git/info/exclude` 에 env 파일명·`.env` 를 멱등 등록(grep -qxF 중복 방지). repo `.gitignore` 와 무관한 로컬 전용 차단.
 
-- [ ] **5. 탐지 로직 REST 전환**
+- [x] **5. 탐지 로직 REST 전환**
   - 내용: detect를 `claude` 호출 대신 백엔드 Jira REST로 전환(빠르고 결정적, 비용 절감).
   - AC: 대시보드/루프가 Jira REST로 plan/build 후보를 조회. claude 기반 detect는 폴백으로만.
   - 영향: `dashboard/server.js`(`/api/detect`), 루프가 백엔드/REST 사용
+  → (완료 2026-06-23) server.js 에 `/api/detect/:mode`(detect-cards.sh 와 동일 JQL) 추가, scriptEnv 가 `DASHBOARD_URL` 주입. detect-cards.sh 가 `DASHBOARD_URL` 있으면 `curl /api/detect/<mode>` 우선, 실패 시 claude(+MCP) 폴백.
 
 ---
 

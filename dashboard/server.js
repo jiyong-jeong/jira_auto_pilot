@@ -82,6 +82,7 @@ function scriptEnv() {
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
   env.LOOP_INTERVAL = String(cfg.intervalSeconds || 3600);
+  env.DASHBOARD_URL = `http://localhost:${PORT}`; // 루프가 REST 탐지를 호출할 주소
   if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
   if (cred.githubToken) {
     env.GH_TOKEN = cred.githubToken;
@@ -159,6 +160,17 @@ async function jiraSearch(jql) {
   return res.json();
 }
 
+// detect-cards.sh 와 동일한 JQL 을 구성(REST 결정적 탐지용)
+function detectJql(mode, cfg) {
+  const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
+  const failed = ` AND (labels != "${cfg.failedLabel}" OR labels IS EMPTY)`;
+  const base = `assignee = currentUser() AND status != "${cfg.doneStatus}" AND text ~ "${cfg.triggerText}"`;
+  if (mode === "plan") {
+    return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
+  }
+  return `${base} AND labels = "${cfg.plannedLabel}"${failed}${proj}`;
+}
+
 // =============================== API ROUTES ==================================
 app.get("/api/health", (req, res) => res.json({ ok: true }));
 
@@ -209,6 +221,18 @@ app.post("/api/loops/:type/stop", (req, res) => {
   const { type } = req.params;
   if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(stopLoop(type));
+});
+
+// REST 기반 결정적 탐지 (루프가 claude 탐지 대신 우선 사용; 실패 시 claude 폴백)
+app.get("/api/detect/:mode", async (req, res) => {
+  const { mode } = req.params;
+  if (!["plan", "build"].includes(mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
+  try {
+    const data = await jiraSearch(detectJql(mode, getConfig()));
+    res.json({ ok: true, mode, keys: (data.issues || []).map((i) => i.key) });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: String(e.message || e) });
+  }
 });
 
 app.get("/api/logs/:type", (req, res) => {

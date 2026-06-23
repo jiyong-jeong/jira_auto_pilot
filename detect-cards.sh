@@ -44,6 +44,18 @@ else
   exit 1
 fi
 
+# ===== REST 우선 탐지 (대시보드 백엔드가 떠 있으면 결정적·저비용) =====
+# DASHBOARD_URL 이 주입되어 있고 curl 이 있으면 /api/detect/<mode> 로 조회.
+# 응답이 없거나 실패하면 아래 claude(+MCP) 탐지로 폴백한다.
+if [[ -n "${DASHBOARD_URL:-}" ]] && command -v curl >/dev/null 2>&1; then
+  REST_RESP="$(curl -fsS --max-time 20 "${DASHBOARD_URL}/api/detect/${MODE}" 2>/dev/null || true)"
+  if [[ -n "${REST_RESP}" ]]; then
+    echo "${REST_RESP}" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | sort -u
+    exit 0
+  fi
+  echo "WARN: REST 탐지 실패 → claude 폴백" >&2
+fi
+
 PROMPT="Jira 에서 다음 JQL 로 이슈를 검색하세요:
 ${JQL}
 
