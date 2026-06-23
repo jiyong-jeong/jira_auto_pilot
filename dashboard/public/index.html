@@ -22,6 +22,7 @@ const api = {
     const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
     return r.json();
   },
+  async del(p) { const r = await fetch(p, { method: "DELETE" }); return r.json(); },
 };
 
 function Section({ title, children, right, collapsible, defaultOpen = false }) {
@@ -89,7 +90,6 @@ const stageBadge = {
   "failed": ["실패(claude-failed)", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
   "done": ["완료(DEV COMPLETED)", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
 };
-
 const resultBadge = {
   "success": ["성공", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
   "skip": ["스킵(답변대기)", "bg-slate-500/20 text-slate-300 border-slate-500/40"],
@@ -97,19 +97,21 @@ const resultBadge = {
   "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
 };
 
-function App() {
-  const [config, setConfig] = useState(null);
-  const [creds, setCreds] = useState(null);
+// =================== 프로젝트 1개 (설정·자격증명·.env·카드 등록·카드 상태) ===================
+function ProjectCard({ proj, onDeleted, flash }) {
+  const PID = proj.id;
+  const withP = (url) => url + (url.includes("?") ? "&" : "?") + "project=" + encodeURIComponent(PID);
+
+  const [config, setConfig] = useState(proj);
+  const [creds, setCreds] = useState({});
   const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" });
-  const [status, setStatus] = useState({ plan: { running: false }, build: { running: false } });
-  const [logs, setLogs] = useState({ plan: "", build: "" });
-  const [cards, setCards] = useState([]);
-  const [cardsErr, setCardsErr] = useState("");
-  const [history, setHistory] = useState([]);
+  const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
   const [jiraMeta, setJiraMeta] = useState({ issueTypes: [], epics: [], loaded: false, err: "" });
   const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [] });
   const [creating, setCreating] = useState(false);
   const [refining, setRefining] = useState(false);
+  const [cards, setCards] = useState([]);
+  const [cardsErr, setCardsErr] = useState("");
   const [expandedKey, setExpandedKey] = useState("");
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -117,305 +119,163 @@ function App() {
   const [replyAnswered, setReplyAnswered] = useState(true);
   const [replyTarget, setReplyTarget] = useState(null);
   const [posting, setPosting] = useState(false);
-  const [claudeLog, setClaudeLog] = useState(null); // { key, phase, text }
-  const [toast, setToast] = useState("");
-  const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
+  const [claudeLog, setClaudeLog] = useState(null);
 
-  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2500); };
+  const credSet = (k) => creds[k] === true;
 
-  const loadAll = useCallback(async () => {
-    setConfig(await api.get("/api/config"));
-    const c = await api.get("/api/credentials");
-    setCreds(c);
-    setCredInput((p) => ({ ...p, atlassianEmail: c.atlassianEmail || "" }));
-    setStatus(await api.get("/api/loops/status"));
-  }, []);
-
-  useEffect(() => { loadAll(); loadHistory(); loadMeta(); loadEnv(); }, [loadAll]);
-
-  // 폴링: 상태 + 로그 + 이력
-  useEffect(() => {
-    const t = setInterval(async () => {
-      setStatus(await api.get("/api/loops/status"));
-      for (const type of ["plan", "build"]) {
-        const r = await api.get(`/api/logs/${type}?lines=120`);
-        setLogs((p) => ({ ...p, [type]: r.log || "" }));
-      }
-      loadHistory();
-    }, 4000);
-    return () => clearInterval(t);
-  }, []);
-
-  // claude 실행 로그 라이브 갱신(열려 있는 동안 3초마다)
+  const loadCreds = async () => {
+    const c = await api.get(`/api/projects/${PID}/credentials`);
+    setCreds(c); setCredInput((p) => ({ ...p, atlassianEmail: c.atlassianEmail || "" }));
+  };
+  const loadEnv = async () => { const r = await api.get(withP("/api/env")); if (r.ok) setEnvFile({ path: r.path, content: r.content, mtime: r.mtime, exists: r.exists, loaded: true }); };
+  const loadMeta = async () => {
+    const r = await api.get(withP("/api/jira/meta"));
+    if (r.ok) { setJiraMeta({ issueTypes: r.issueTypes || [], epics: r.epics || [], loaded: true, err: "" }); setNewCard((p) => p.issueType ? p : { ...p, issueType: (r.issueTypes.find((t) => t.name === "Task") || r.issueTypes[0] || {}).name || "" }); }
+    else setJiraMeta({ issueTypes: [], epics: [], loaded: true, err: r.message || "메타 조회 실패" });
+  };
+  useEffect(() => { loadCreds(); loadEnv(); loadMeta(); }, []);
   useEffect(() => {
     if (!claudeLog) return;
     const key = claudeLog.key, phase = claudeLog.phase;
-    const t = setInterval(async () => {
-      const r = await api.get(`/api/claude-log/${key}/${phase}?lines=600`);
-      if (r.ok) setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.log } : p);
-    }, 3000);
+    const t = setInterval(async () => { const r = await api.get(withP(`/api/claude-log/${key}/${phase}?lines=600`)); if (r.ok) setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.log } : p); }, 3000);
     return () => clearInterval(t);
   }, [claudeLog && claudeLog.key, claudeLog && claudeLog.phase]);
 
-  const saveConfig = async () => { await api.post("/api/config", config); flash("설정 저장됨"); };
+  const saveConfig = async () => { const r = await api.post("/api/projects", { ...config, id: PID }); if (r.ok) { setConfig(r.project); flash("설정 저장됨"); } };
   const saveCreds = async () => {
-    await api.post("/api/credentials", credInput);
+    await api.post(`/api/projects/${PID}/credentials`, credInput);
     setCredInput((p) => ({ ...p, anthropicApiKey: "", githubToken: "", atlassianToken: "", slackWebhookUrl: "" }));
-    setCreds(await api.get("/api/credentials"));
-    flash("자격증명 저장됨");
+    loadCreds(); flash("자격증명 저장됨");
   };
-  const toggleLoop = async (type) => {
-    const running = status[type]?.running;
-    const r = await api.post(`/api/loops/${type}/${running ? "stop" : "start"}`);
-    flash(r.ok ? `${type} 루프 ${running ? "중지" : "시작"}` : (r.message || "실패"));
-    setStatus(await api.get("/api/loops/status"));
-  };
-  const runOnce = async (type) => {
-    const r = await api.post(`/api/loops/${type}/run-once`);
-    flash(r.ok ? `${type} 전체 즉시 실행 시작 — 로그를 확인하세요` : (r.message || "실패"));
-  };
-  const runCardNow = async (key, phase) => {
-    const r = await api.post(`/api/cards/${key}/run`, { phase });
-    flash(r.ok ? `${key} ${phase} 즉시 실행 — 아래 'Claude 실행 로그'로 과정을 확인하세요` : (r.message || "실패"));
-    if (r.ok) showClaudeLog(key, phase);
-  };
-  const showClaudeLog = async (key, phase) => {
-    setClaudeLog({ key, phase, text: "불러오는 중…" });
-    const r = await api.get(`/api/claude-log/${key}/${phase}?lines=600`);
-    setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.ok ? r.log : (r.message || "조회 실패") } : p);
-  };
-  const loadCards = async () => {
-    const r = await api.get("/api/cards");
-    if (r.ok) { setCards(r.issues); setCardsErr(""); }
-    else { setCardsErr(r.message || "조회 실패"); }
-  };
-  const toggleCard = async (key) => {
-    if (expandedKey === key) { setExpandedKey(""); setDetail(null); return; }
-    setExpandedKey(key); setDetail(null); setReply(""); setReplyAnswered(true); setReplyTarget(null); setDetailLoading(true);
-    const r = await api.get(`/api/jira/issue/${key}`);
-    setDetailLoading(false);
-    setDetail(r.ok ? r : { error: r.message || "조회 실패" });
-  };
-  const replyToComment = (cm) => {
-    setReplyTarget({ author: cm.author, accountId: cm.accountId, snippet: (cm.body || "").slice(0, 280) });
-  };
-  const postReply = async () => {
-    if (!reply.trim()) { flash("답변 내용을 입력하세요"); return; }
-    setPosting(true);
-    const r = await api.post(`/api/jira/issue/${expandedKey}/comment`, { body: reply, markAnswered: replyAnswered, replyTo: replyTarget || undefined });
-    setPosting(false);
-    if (r.ok) {
-      flash("답변 등록됨" + (replyAnswered ? " (claude-answered 라벨 추가)" : ""));
-      setReply(""); setReplyTarget(null);
-      const d = await api.get(`/api/jira/issue/${expandedKey}`);
-      if (d.ok) setDetail(d);
-      loadCards();
-    } else flash(r.message || "등록 실패");
-  };
-  const loadHistory = async () => {
-    const r = await api.get("/api/history?limit=100");
-    if (r.ok) setHistory(r.entries || []);
-  };
-  const clearLog = async (type) => {
-    if (!window.confirm(`loop-${type}.log 를 비울까요?`)) return;
-    const r = await api.post(`/api/logs/${type}/clear`);
-    if (r.ok) { setLogs((p) => ({ ...p, [type]: "" })); flash(`loop-${type}.log 비움`); }
-    else flash(r.message || "비우기 실패");
-  };
-  const loadMeta = async () => {
-    const r = await api.get("/api/jira/meta");
-    if (r.ok) {
-      setJiraMeta({ issueTypes: r.issueTypes || [], epics: r.epics || [], loaded: true, err: "" });
-      setNewCard((p) => p.issueType ? p : { ...p, issueType: (r.issueTypes.find((t) => t.name === "Task") || r.issueTypes[0] || {}).name || "" });
-    } else {
-      setJiraMeta({ issueTypes: [], epics: [], loaded: true, err: r.message || "메타 조회 실패" });
-    }
-  };
+  const saveEnv = async () => { const r = await api.post(withP("/api/env"), { content: envFile.content }); if (r.ok) { flash("env 저장됨 (.bak 백업)"); setEnvFile((p) => ({ ...p, mtime: r.mtime, exists: true })); } else flash(r.message || "저장 실패"); };
   const refineDesc = async () => {
     if (!newCard.description.trim()) { flash("정리할 설명을 먼저 입력하세요"); return; }
     setRefining(true);
-    const r = await api.post("/api/ai/refine-description", { text: newCard.description, summary: newCard.summary });
+    const r = await api.post("/api/ai/refine-description", { text: newCard.description, summary: newCard.summary, project: PID });
     setRefining(false);
-    if (r.ok) { setNewCard((p) => ({ ...p, description: r.description })); flash("Claude가 설명을 정리했습니다"); }
-    else flash(r.message || "변환 실패");
+    if (r.ok) { setNewCard((p) => ({ ...p, description: r.description })); flash("Claude가 설명을 정리했습니다"); } else flash(r.message || "변환 실패");
   };
   const pickImages = (fileList) => {
-    const files = Array.from(fileList || []);
-    if (!files.length) return;
-    Promise.all(files.map((f) => new Promise((resolve) => {
-      const rd = new FileReader();
-      rd.onload = () => resolve({ filename: f.name, contentType: f.type || "application/octet-stream", dataBase64: rd.result });
-      rd.readAsDataURL(f);
-    }))).then((arr) => setNewCard((p) => ({ ...p, attachments: [...p.attachments, ...arr] })));
+    const files = Array.from(fileList || []); if (!files.length) return;
+    Promise.all(files.map((f) => new Promise((resolve) => { const rd = new FileReader(); rd.onload = () => resolve({ filename: f.name, contentType: f.type || "application/octet-stream", dataBase64: rd.result }); rd.readAsDataURL(f); })))
+      .then((arr) => setNewCard((p) => ({ ...p, attachments: [...p.attachments, ...arr] })));
   };
   const removeAttachment = (i) => setNewCard((p) => ({ ...p, attachments: p.attachments.filter((_, idx) => idx !== i) }));
   const createCard = async () => {
     if (!newCard.summary.trim()) { flash("요약을 입력하세요"); return; }
     setCreating(true);
-    const parentKey = newCard.parentInput.trim() || newCard.epicKey;
-    const r = await api.post("/api/jira/issue", {
-      summary: newCard.summary, description: newCard.description, issueType: newCard.issueType,
-      parentKey, addTriggerLabel: newCard.addTriggerLabel, assignSelf: newCard.assignSelf,
-      attachments: newCard.attachments,
-    });
+    const r = await api.post("/api/jira/issue", { summary: newCard.summary, description: newCard.description, issueType: newCard.issueType, parentKey: newCard.parentInput.trim() || newCard.epicKey, addTriggerLabel: newCard.addTriggerLabel, assignSelf: newCard.assignSelf, attachments: newCard.attachments, project: PID });
     setCreating(false);
-    if (r.ok) {
-      let msg = `카드 생성됨: ${r.key}`;
-      if (r.attached && r.attached.length) msg += ` · 첨부 ${r.attached.length}건`;
-      if (r.attachErrors && r.attachErrors.length) msg += ` · 첨부 실패 ${r.attachErrors.length}건`;
-      flash(msg);
-      setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "", attachments: [] }));
-      loadCards(); loadMeta();
-    } else { flash(r.message || "생성 실패"); }
+    if (r.ok) { let m = `카드 생성됨: ${r.key}`; if (r.attached?.length) m += ` · 첨부 ${r.attached.length}`; if (r.attachErrors?.length) m += ` · 첨부실패 ${r.attachErrors.length}`; flash(m); setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "", attachments: [] })); loadCards(); }
+    else flash(r.message || "생성 실패");
   };
-  const loadEnv = async () => {
-    const r = await api.get("/api/env");
-    if (r.ok) setEnvFile({ path: r.path, content: r.content, mtime: r.mtime, exists: r.exists, loaded: true });
-    else flash(r.message || "env 로드 실패");
+  const loadCards = async () => { const r = await api.get(withP("/api/cards")); if (r.ok) { setCards(r.issues); setCardsErr(""); } else setCardsErr(r.message || "조회 실패"); };
+  const toggleCard = async (key) => {
+    if (expandedKey === key) { setExpandedKey(""); setDetail(null); return; }
+    setExpandedKey(key); setDetail(null); setReply(""); setReplyAnswered(true); setReplyTarget(null); setClaudeLog(null); setDetailLoading(true);
+    const r = await api.get(withP(`/api/jira/issue/${key}`)); setDetailLoading(false); setDetail(r.ok ? r : { error: r.message || "조회 실패" });
   };
-  const saveEnv = async () => {
-    const r = await api.post("/api/env", { content: envFile.content });
-    if (r.ok) { flash("work.env 저장됨 (.bak 백업 생성)"); setEnvFile((p) => ({ ...p, mtime: r.mtime, exists: true })); }
-    else flash(r.message || "저장 실패");
+  const postReply = async () => {
+    if (!reply.trim()) { flash("답변 내용을 입력하세요"); return; }
+    setPosting(true);
+    const r = await api.post(`/api/jira/issue/${expandedKey}/comment`, { body: reply, markAnswered: replyAnswered, replyTo: replyTarget || undefined, project: PID });
+    setPosting(false);
+    if (r.ok) { flash("답변 등록됨" + (replyAnswered ? " (claude-answered)" : "")); setReply(""); setReplyTarget(null); const d = await api.get(withP(`/api/jira/issue/${expandedKey}`)); if (d.ok) setDetail(d); loadCards(); }
+    else flash(r.message || "등록 실패");
   };
+  const runCardNow = async (key, phase) => { const r = await api.post(`/api/cards/${key}/run`, { phase, project: PID }); flash(r.ok ? `${key} ${phase} 즉시 실행 — Claude 실행 로그 확인` : (r.message || "실패")); if (r.ok) showClaudeLog(key, phase); };
+  const showClaudeLog = async (key, phase) => { setClaudeLog({ key, phase, text: "불러오는 중…" }); const r = await api.get(withP(`/api/claude-log/${key}/${phase}?lines=600`)); setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.ok ? r.log : (r.message || "조회 실패") } : p); };
+  const del = async () => { if (!window.confirm(`프로젝트 '${config.name || PID}' 를 삭제할까요? (설정/자격증명만 제거, Jira/repo 는 영향 없음)`)) return; await api.del(`/api/projects/${PID}`); onDeleted(); };
 
-  if (!config || !creds) return <div className="p-10">불러오는 중…</div>;
-
-  const credSet = (k) => creds[k] === true;
+  const title = <span>📁 {config.name || PID} <span className="text-xs text-slate-500">({config.projectKey || "프로젝트 키 미설정"})</span></span>;
 
   return (
-    <div className="max-w-5xl mx-auto px-6 py-8">
-      <h1 className="text-2xl font-bold mb-1">Jira → Claude 자동화 대시보드</h1>
-      <p className="text-slate-400 text-sm mb-6">workspace·repo·주기를 설정하고 plan/build 루프를 제어·모니터링합니다.</p>
-
-      {toast && <div className="fixed top-4 right-4 bg-indigo-600 px-4 py-2 rounded-lg text-sm shadow-lg z-50">{toast}</div>}
-
-      {/* 제어 */}
-      <Section title="루프 제어"
-        right={<Btn color="slate" onClick={loadAll}>새로고침</Btn>}>
-        <div className="grid grid-cols-2 gap-4">
-          {["plan", "build"].map((type) => {
-            const running = status[type]?.running;
-            return (
-              <div key={type} className="bg-slate-800/60 border border-slate-700 rounded-lg p-4">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="font-semibold">{type} 루프</span>
-                  <span className={`text-xs px-2 py-1 rounded-full border ${running ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-slate-600/30 text-slate-400 border-slate-600"}`}>
-                    {running ? `실행 중 (pid ${status[type].pid})` : "중지됨"}
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>
-                    {running ? "중지" : "시작"}
-                  </Btn>
-                  <Btn color="indigo" onClick={() => runOnce(type)}>전체 실행</Btn>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <p className="text-xs text-slate-500 mt-3">시작 시 즉시 1회 탐지 후, 설정된 주기(정시 정렬)로 반복합니다.</p>
-      </Section>
-
-      {/* 자격증명 */}
-      <Section title="자격증명 (로컬 저장)" collapsible right={<Btn onClick={saveCreds}>저장</Btn>}>
-        <p className="text-xs text-amber-300/80 mb-3">⚠ 토큰은 이 컴퓨터의 credentials.json(권한 600)에 저장됩니다. 입력란을 비워두면 기존 값이 유지됩니다.</p>
-        <div className="grid grid-cols-2 gap-x-5">
-          <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓ 저장됨" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."}
-            info="루프 안에서 Claude Code(claude)가 카드 검토·개발·Jira 코멘트를 수행할 때 인증에 사용합니다. 비워두면 이 컴퓨터의 로컬 claude 로그인으로 폴백합니다." />
-          <Field label={`GitHub Token ${credSet("githubToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.githubToken} onChange={(v) => setCredInput({ ...credInput, githubToken: v })} placeholder={credSet("githubToken") ? "••• 저장됨" : "ghp_..."}
-            info="대상 repo clone/push 와 PR 생성(gh CLI)에 사용합니다. 비워두면 로컬 gh auth 로그인으로 폴백합니다. repo 쓰기 권한이 필요합니다." />
-          <Field label="Atlassian 이메일" value={credInput.atlassianEmail} onChange={(v) => setCredInput({ ...credInput, atlassianEmail: v })} placeholder="you@company.com"
-            info="Jira REST 조회(Basic 인증)의 계정 이메일입니다. 아래 API Token 과 짝으로 카드 조회·REST 탐지에 사용됩니다." />
-          <Field label={`Atlassian API Token ${credSet("atlassianToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.atlassianToken} onChange={(v) => setCredInput({ ...credInput, atlassianToken: v })} placeholder={credSet("atlassianToken") ? "••• 저장됨" : "Atlassian API token"}
-            info="대시보드 카드 상태 조회와 REST 탐지(/api/cards, /api/detect)에 쓰는 Jira API 토큰입니다. id.atlassian.com 에서 발급. (루프 내 claude 의 Jira 작업은 별도로 Atlassian MCP OAuth 를 사용)" />
-          <Field label={`Slack Incoming Webhook ${credSet("slackWebhookUrl") ? "✓ 저장됨" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."}
-            info="설정하면 카드가 처리 완료(또는 반복 실패)될 때마다 이 Webhook 으로 알림을 보냅니다. 비워두면 알림은 스킵됩니다." />
-        </div>
-        <p className="text-xs text-slate-500 mt-2">Slack Webhook 을 입력하면 카드가 처리 완료될 때마다 알림을 보냅니다. 비워두면 알림은 스킵됩니다.</p>
-      </Section>
-
+    <Section title={title} collapsible right={<div className="flex gap-2"><Btn onClick={saveConfig}>설정 저장</Btn><Btn color="red" onClick={del}>삭제</Btn></div>}>
       {/* 설정 */}
-      <Section title="프로젝트 설정" collapsible right={<Btn onClick={saveConfig}>저장</Btn>}>
+      <div className="grid grid-cols-2 gap-x-5">
+        <Field label="프로젝트 이름" value={config.name} onChange={(v) => setConfig({ ...config, name: v })} placeholder="표시 이름" />
+        <Field label="GitHub Repository URL" value={config.repoUrl} onChange={(v) => setConfig({ ...config, repoUrl: v })} placeholder="https://github.com/Org/repo.git" />
+        <Field label="Base 브랜치" value={config.baseBranch} onChange={(v) => setConfig({ ...config, baseBranch: v })} />
+        <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net" />
+        <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
+        <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
+        <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })} />
+        <label className="block mb-3">
+          <span className="text-sm text-slate-400">트리거 방식</span>
+          <select value={config.triggerMode || "label"} onChange={(e) => setConfig({ ...config, triggerMode: e.target.value })}
+            className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+            <option value="label">라벨 (권장)</option><option value="text">텍스트 (레거시)</option>
+          </select>
+        </label>
+        {config.triggerMode === "text"
+          ? <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
+          : <Field label="트리거 라벨" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work" />}
+        <Field label="완료 상태명" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} />
+        <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
+        <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
+        <Field label="동시 처리 상한 (병렬)" type="number" value={config.maxParallel} onChange={(v) => setConfig({ ...config, maxParallel: parseInt(v || "3", 10) })} placeholder="3" />
+        <Field label="clone 베이스 폴더" value={config.cloneBase} onChange={(v) => setConfig({ ...config, cloneBase: v })} placeholder="/path/to/repos" />
+        <Field label="테스트 명령 (비우면 자동 감지)" value={config.testCmd} onChange={(v) => setConfig({ ...config, testCmd: v })} placeholder="예: npm test" />
+        <Field label="빌드 명령 (비우면 자동 감지)" value={config.buildCmd} onChange={(v) => setConfig({ ...config, buildCmd: v })} placeholder="예: npm run build" />
+      </div>
+      <p className="text-xs text-slate-500 mt-1">PR 전 검증: 테스트가 있으면 통과까지 수정, 없으면 빌드만 시도. 설정 변경 후 "설정 저장".</p>
+
+      {/* 자격증명 (프로젝트별) */}
+      <div className="mt-4 pt-4 border-t border-slate-700">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">자격증명 (이 프로젝트 전용)</span>
+          <Btn onClick={saveCreds}>자격증명 저장</Btn>
+        </div>
         <div className="grid grid-cols-2 gap-x-5">
-          <Field label="GitHub Repository URL" value={config.repoUrl} onChange={(v) => setConfig({ ...config, repoUrl: v })} placeholder="https://github.com/Org/repo.git" />
-          <Field label="Base 브랜치" value={config.baseBranch} onChange={(v) => setConfig({ ...config, baseBranch: v })} />
-          <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net" />
-          <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
-          <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
-          <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })} />
-          <label className="block mb-3">
-            <span className="text-sm text-slate-400">트리거 방식</span>
-            <select
-              value={config.triggerMode || "label"}
-              onChange={(e) => setConfig({ ...config, triggerMode: e.target.value })}
-              className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
-              <option value="label">라벨 (권장)</option>
-              <option value="text">텍스트 (레거시)</option>
-            </select>
-          </label>
-          {config.triggerMode === "text"
-            ? <Field label="트리거 텍스트 (text 모드)" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
-            : <Field label="트리거 라벨 (label 모드)" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work" />}
-          <Field label="완료 상태명" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} />
-          <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
-          <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
-          <Field label="동시 처리 상한 (병렬)" type="number" value={config.maxParallel} onChange={(v) => setConfig({ ...config, maxParallel: parseInt(v || "3", 10) })} placeholder="3" />
-          <Field label="작업 폴더 (WORK_DIR)" value={config.workDir} onChange={(v) => setConfig({ ...config, workDir: v })} />
-          <Field label="clone 베이스 폴더" value={config.cloneBase} onChange={(v) => setConfig({ ...config, cloneBase: v })} placeholder="/path/to/repos" />
-          <Field label="테스트 명령 (비우면 자동 감지)" value={config.testCmd} onChange={(v) => setConfig({ ...config, testCmd: v })} placeholder="예: npm test / pytest" />
-          <Field label="빌드 명령 (비우면 자동 감지)" value={config.buildCmd} onChange={(v) => setConfig({ ...config, buildCmd: v })} placeholder="예: npm run build" />
+          <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."}
+            info="루프 안 claude 인증. 비우면 로컬 claude 로그인 폴백." />
+          <Field label={`GitHub Token ${credSet("githubToken") ? "✓" : ""}`} type="password" value={credInput.githubToken} onChange={(v) => setCredInput({ ...credInput, githubToken: v })} placeholder={credSet("githubToken") ? "••• 저장됨" : "ghp_..."}
+            info="repo clone/push + PR(gh). 비우면 로컬 gh auth 폴백." />
+          <Field label="Atlassian 이메일" value={credInput.atlassianEmail} onChange={(v) => setCredInput({ ...credInput, atlassianEmail: v })} placeholder="you@company.com"
+            info="Jira REST Basic 인증 계정. 프로젝트마다 다른 사이트/계정 가능." />
+          <Field label={`Atlassian API Token ${credSet("atlassianToken") ? "✓" : ""}`} type="password" value={credInput.atlassianToken} onChange={(v) => setCredInput({ ...credInput, atlassianToken: v })} placeholder={credSet("atlassianToken") ? "••• 저장됨" : "Atlassian API token"}
+            info="이 프로젝트의 카드 조회·탐지·등록에 쓰는 Jira 토큰. id.atlassian.com 에서 발급." />
+          <Field label={`Slack Webhook ${credSet("slackWebhookUrl") ? "✓" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."}
+            info="이 프로젝트의 처리 완료/실패 알림. 비우면 스킵." />
         </div>
-        <p className="text-xs text-slate-500 mt-2">PR 전 검증: 테스트가 있으면 통과까지 수정, 없으면 빌드만 시도(빌드 수단 없으면 건너뜀).</p>
+      </div>
 
-        {/* 환경 변수(.env) — 프로젝트 설정에 종속 */}
-        <div className="mt-4 pt-4 border-t border-slate-700">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-300">환경 변수 (.env) — 대상 repo로 복사</span>
-            {config.envMode !== "path" && (
-              <div className="flex gap-2">
-                <Btn color="slate" onClick={loadEnv}>불러오기</Btn>
-                <Btn color="green" onClick={saveEnv} disabled={!envFile.loaded}>내용 저장</Btn>
-              </div>
-            )}
-          </div>
-          <label className="block mb-3">
-            <span className="text-sm text-slate-400">제공 방식</span>
-            <select value={config.envMode || "content"} onChange={(e) => setConfig({ ...config, envMode: e.target.value })}
-              className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
-              <option value="content">내용 직접 입력</option>
-              <option value="path">파일 경로 지정</option>
-            </select>
-          </label>
-          {config.envMode === "path" ? (
-            <div>
-              <Field label="사용할 .env 파일 경로 (이 파일을 그대로 복사)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="/abs/path/to/.env" />
-              <p className="text-xs text-slate-500">지정한 파일을 대상 repo 의 .env(work.env)로 복사합니다. 내용은 대시보드에서 편집하지 않으니 "설정 저장"만 누르세요.</p>
-            </div>
-          ) : (
-            <div>
-              <Field label="저장 경로 (비우면 <작업폴더>/work.env)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="비워두면 work.env 로 저장" />
-              <div className="text-xs text-slate-400 mb-1">
-                {envFile.loaded ? (envFile.exists ? `현재 파일 수정: ${new Date(envFile.mtime).toLocaleString()}` : "파일 없음 — 저장 시 생성") : "‘불러오기’로 기존 내용을 가져오거나 바로 입력 후 ‘내용 저장’"}
-              </div>
-              <textarea
-                value={envFile.content}
-                onChange={(e) => setEnvFile({ ...envFile, content: e.target.value, loaded: true })}
-                spellCheck={false}
-                placeholder="KEY=VALUE 형식으로 .env 내용을 직접 입력"
-                className="w-full h-60 bg-black/60 border border-slate-700 rounded-lg p-3 text-xs font-mono focus:outline-none focus:border-indigo-400"
-              />
-              <p className="text-xs text-amber-300/80 mt-1">⚠ 시크릿입니다. 저장 시 기존 파일은 .bak 백업되고, 대상 repo 복사 시 .git/info/exclude 로 커밋이 차단됩니다.</p>
-            </div>
-          )}
+      {/* .env */}
+      <div className="mt-4 pt-4 border-t border-slate-700">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">환경 변수 (.env) — 대상 repo로 복사</span>
+          {config.envMode !== "path" && <div className="flex gap-2"><Btn color="slate" onClick={loadEnv}>불러오기</Btn><Btn color="green" onClick={saveEnv} disabled={!envFile.loaded}>내용 저장</Btn></div>}
         </div>
-
-        {/* Jira 카드 등록 — 프로젝트 설정에 종속 */}
-        <div className="mt-4 pt-4 border-t border-slate-700">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-300">Jira 카드 등록</span>
-            <Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>
+        <label className="block mb-3">
+          <span className="text-sm text-slate-400">제공 방식</span>
+          <select value={config.envMode || "content"} onChange={(e) => setConfig({ ...config, envMode: e.target.value })}
+            className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
+            <option value="content">내용 직접 입력</option><option value="path">파일 경로 지정</option>
+          </select>
+        </label>
+        {config.envMode === "path" ? (
+          <div>
+            <Field label="사용할 .env 파일 경로 (그대로 복사)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="/abs/path/to/.env" />
+            <p className="text-xs text-slate-500">지정 파일을 대상 repo 의 .env 로 복사. "설정 저장"만 누르세요.</p>
           </div>
+        ) : (
+          <div>
+            <Field label={`저장 경로 (비우면 work-${PID}.env)`} value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder={`비우면 work-${PID}.env`} />
+            <div className="text-xs text-slate-400 mb-1">{envFile.loaded ? (envFile.exists ? `현재 파일 수정: ${new Date(envFile.mtime).toLocaleString()}` : "파일 없음 — 저장 시 생성") : "‘불러오기’ 또는 바로 입력 후 ‘내용 저장’"}</div>
+            <textarea value={envFile.content} onChange={(e) => setEnvFile({ ...envFile, content: e.target.value, loaded: true })} spellCheck={false}
+              placeholder="KEY=VALUE 형식으로 .env 내용 직접 입력"
+              className="w-full h-48 bg-black/60 border border-slate-700 rounded-lg p-3 text-xs font-mono focus:outline-none focus:border-indigo-400" />
+            <p className="text-xs text-amber-300/80 mt-1">⚠ 시크릿. 저장 시 .bak 백업, 대상 repo 복사 시 .git/info/exclude 로 커밋 차단.</p>
+          </div>
+        )}
+      </div>
+
+      {/* 카드 등록 */}
+      <div className="mt-4 pt-4 border-t border-slate-700">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">Jira 카드 등록</span>
+          <Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>
+        </div>
         {jiraMeta.err && <p className="text-rose-400 text-sm mb-2">{jiraMeta.err}</p>}
         {!config.projectKey && <p className="text-amber-300/80 text-sm mb-2">프로젝트 키를 먼저 설정·저장하세요.</p>}
         <div className="grid grid-cols-2 gap-x-5">
@@ -437,21 +297,17 @@ function App() {
             </select>
           </label>
           <Field label="또는 상위 키 직접 입력 (우선 적용)" value={newCard.parentInput} onChange={(v) => setNewCard({ ...newCard, parentInput: v })} placeholder="예: EKYB-123"
-            info="상위는 자식보다 한 단계 위여야 합니다: 에픽 > 작업/스토리 > 하위작업. 예) 작업(EKYB-764) '하위'에 두려면 이슈 타입을 '하위 작업'으로 선택. 에픽 하위에 두려면 이슈 타입은 '작업' 등으로 두고 상위에 에픽 키 지정." />
+            info="상위는 자식보다 한 단계 위: 에픽 > 작업/스토리 > 하위작업. 작업 하위에 두려면 이슈 타입을 '하위 작업'으로." />
         </div>
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
             <span className="text-sm text-slate-400">설명</span>
-            <Btn color="slate" onClick={refineDesc} disabled={refining || !newCard.description.trim()}>
-              {refining ? "정리 중…" : "✨ Claude로 정리"}
-            </Btn>
+            <Btn color="slate" onClick={refineDesc} disabled={refining || !newCard.description.trim()}>{refining ? "정리 중…" : "✨ Claude로 정리"}</Btn>
           </div>
-          <textarea value={newCard.description} onChange={(e) => setNewCard({ ...newCard, description: e.target.value })}
-            spellCheck={false} placeholder="작업 내용을 러프하게 적고 'Claude로 정리'를 누르면 배경/요구사항/완료조건으로 구조화됩니다."
-            className="w-full h-40 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+          <textarea value={newCard.description} onChange={(e) => setNewCard({ ...newCard, description: e.target.value })} spellCheck={false}
+            placeholder="작업 내용을 러프하게 적고 'Claude로 정리'를 누르면 배경/요구사항/완료조건으로 구조화됩니다."
+            className="w-full h-32 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
         </div>
-
-        {/* 이미지 첨부 */}
         <div className="mb-3">
           <span className="text-sm text-slate-400">이미지 첨부</span>
           <input type="file" accept="image/*" multiple onChange={(e) => { pickImages(e.target.files); e.target.value = ""; }}
@@ -459,43 +315,31 @@ function App() {
           {newCard.attachments.length > 0 && (
             <div className="flex flex-wrap gap-2 mt-2">
               {newCard.attachments.map((a, i) => (
-                <span key={i} className="inline-flex items-center gap-1 text-xs bg-slate-700/60 border border-slate-600 rounded-full px-2 py-1">
-                  🖼 {a.filename}
-                  <button onClick={() => removeAttachment(i)} className="text-slate-400 hover:text-rose-300 ml-1">✕</button>
-                </span>
+                <span key={i} className="inline-flex items-center gap-1 text-xs bg-slate-700/60 border border-slate-600 rounded-full px-2 py-1">🖼 {a.filename}
+                  <button onClick={() => removeAttachment(i)} className="text-slate-400 hover:text-rose-300 ml-1">✕</button></span>
               ))}
             </div>
           )}
-          <p className="text-xs text-slate-500 mt-1">카드 생성 직후 Jira 첨부로 업로드됩니다. (개당 약 20MB 이하 권장)</p>
         </div>
         <div className="flex items-center gap-5 mb-3 text-sm text-slate-300">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={newCard.addTriggerLabel} onChange={(e) => setNewCard({ ...newCard, addTriggerLabel: e.target.checked })} />
-            <span>{config.triggerLabel || "claude-work"} 라벨 추가 (자동화 대상)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="checkbox" checked={newCard.assignSelf} onChange={(e) => setNewCard({ ...newCard, assignSelf: e.target.checked })} />
-            <span>나에게 할당 (루프 탐지 조건)</span>
-          </label>
+          <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.addTriggerLabel} onChange={(e) => setNewCard({ ...newCard, addTriggerLabel: e.target.checked })} /><span>{config.triggerLabel || "claude-work"} 라벨 추가</span></label>
+          <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.assignSelf} onChange={(e) => setNewCard({ ...newCard, assignSelf: e.target.checked })} /><span>나에게 할당</span></label>
         </div>
         <Btn color="green" onClick={createCard} disabled={creating || !config.projectKey}>{creating ? "생성 중…" : "카드 생성"}</Btn>
-        <p className="text-xs text-slate-500 mt-2">자동화로 처리하려면 라벨 추가 + 나에게 할당을 켜두세요. (둘 다 충족해야 plan 루프가 탐지)</p>
-        </div>
+      </div>
 
-        {/* 카드 상태 — 프로젝트 설정에 종속 */}
-        <div className="mt-4 pt-4 border-t border-slate-700">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-sm font-medium text-slate-300">카드 상태</span>
-            <Btn color="slate" onClick={loadCards}>조회</Btn>
-          </div>
+      {/* 카드 상태 */}
+      <div className="mt-4 pt-4 border-t border-slate-700">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">카드 상태</span>
+          <Btn color="slate" onClick={loadCards}>조회</Btn>
+        </div>
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
         {cards.length === 0 ? (
-          <p className="text-slate-500 text-sm">조회 버튼을 눌러 {config.triggerMode === "text" ? config.triggerText : config.triggerLabel} 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
+          <p className="text-slate-500 text-sm">조회 버튼을 눌러 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
         ) : (
           <table className="w-full text-sm">
-            <thead><tr className="text-slate-400 text-left border-b border-slate-700">
-              <th className="py-2">키</th><th>요약</th><th>상태</th><th>단계</th>
-            </tr></thead>
+            <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">키</th><th>요약</th><th>상태</th><th>단계</th></tr></thead>
             <tbody>
               {cards.map((c) => {
                 const [label, cls] = stageBadge[c.stage] || ["-", ""];
@@ -503,77 +347,50 @@ function App() {
                 return (
                   <React.Fragment key={c.key}>
                     <tr className="border-b border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => toggleCard(c.key)}>
-                      <td className="py-2">
-                        <span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span>
-                        <a href={c.url} target="_blank" onClick={(e) => e.stopPropagation()} className="text-indigo-400 hover:underline">{c.key}</a>
-                      </td>
-                      <td className="pr-3">{c.summary}</td>
-                      <td className="text-slate-300">{c.status}</td>
+                      <td className="py-2"><span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span><a href={c.url} target="_blank" onClick={(e) => e.stopPropagation()} className="text-indigo-400 hover:underline">{c.key}</a></td>
+                      <td className="pr-3">{c.summary}</td><td className="text-slate-300">{c.status}</td>
                       <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
                     </tr>
                     {open && (
-                      <tr className="border-b border-slate-800 bg-slate-900/50">
-                        <td colSpan={4} className="p-4">
-                          {detailLoading ? (
-                            <p className="text-slate-400 text-sm">불러오는 중…</p>
-                          ) : detail && detail.error ? (
-                            <p className="text-rose-400 text-sm">{detail.error}</p>
-                          ) : detail && (
-                            <div>
-                              <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-700">
-                                <span className="text-xs text-slate-400">이 카드만 즉시 실행:</span>
-                                <Btn color="indigo" onClick={() => runCardNow(c.key, "plan")}>plan</Btn>
-                                <Btn color="indigo" onClick={() => runCardNow(c.key, "build")}>build</Btn>
-                                <span className="text-xs text-slate-400 ml-3">Claude 실행 로그:</span>
-                                <Btn color="slate" onClick={() => showClaudeLog(c.key, "plan")}>plan</Btn>
-                                <Btn color="slate" onClick={() => showClaudeLog(c.key, "build")}>build</Btn>
-                              </div>
-                              {claudeLog && claudeLog.key === c.key && (
-                                <div className="mb-4">
-                                  <div className="flex items-center justify-between mb-1">
-                                    <span className="text-xs text-slate-400">Claude 실행 로그 — {claudeLog.phase} (3초마다 갱신, 🔧도구·💬메시지·✅결과)</span>
-                                    <button onClick={() => setClaudeLog(null)} className="text-[11px] text-slate-400 hover:text-rose-300">닫기</button>
-                                  </div>
-                                  <pre className="bg-black/60 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 h-72 overflow-auto">{claudeLog.text || "(로그 없음)"}</pre>
-                                </div>
-                              )}
-                              <div className="text-xs text-slate-400 mb-1">원문 설명</div>
-                              <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
-                              <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
-                              <div className="space-y-2 mb-4 max-h-72 overflow-auto">
-                                {detail.comments.length === 0 ? (
-                                  <p className="text-slate-500 text-xs">코멘트 없음</p>
-                                ) : detail.comments.map((cm, i) => (
-                                  <div key={i} className="bg-slate-800/60 border border-slate-700 rounded p-2">
-                                    <div className="flex items-center justify-between mb-1">
-                                      <span className="text-[11px] text-slate-400">{cm.author} · {cm.created ? new Date(cm.created).toLocaleString() : ""}</span>
-                                      <button onClick={() => replyToComment(cm)} className="text-[11px] text-indigo-400 hover:text-indigo-300">↳ 답글</button>
-                                    </div>
-                                    <div className="text-xs whitespace-pre-wrap text-slate-200">{cm.body}</div>
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="text-xs text-slate-400 mb-1">답변 작성</div>
-                              {replyTarget && (
-                                <div className="flex items-center justify-between bg-indigo-500/10 border border-indigo-500/30 rounded px-2 py-1 mb-1 text-xs text-indigo-200">
-                                  <span>↳ <b>{replyTarget.author}</b> 의 코멘트에 답글 (원문 인용·멘션 포함)</span>
-                                  <button onClick={() => setReplyTarget(null)} className="text-slate-400 hover:text-rose-300">취소</button>
-                                </div>
-                              )}
-                              <textarea value={reply} onChange={(e) => setReply(e.target.value)} spellCheck={false}
-                                placeholder="질문에 대한 답변/추가 설계를 적으세요. 등록하면 카드 코멘트로 달립니다."
-                                className="w-full h-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
-                              <div className="flex items-center justify-between mt-2">
-                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                  <input type="checkbox" checked={replyAnswered} onChange={(e) => setReplyAnswered(e.target.checked)} />
-                                  <span>답변 완료로 표시 ({config.answeredLabel || "claude-answered"} 라벨 추가 → build 진행)</span>
-                                </label>
-                                <Btn color="green" onClick={postReply} disabled={posting}>{posting ? "등록 중…" : "답변 등록"}</Btn>
-                              </div>
+                      <tr className="border-b border-slate-800 bg-slate-900/50"><td colSpan={4} className="p-4">
+                        {detailLoading ? <p className="text-slate-400 text-sm">불러오는 중…</p> : detail && detail.error ? <p className="text-rose-400 text-sm">{detail.error}</p> : detail && (
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2 mb-3 pb-3 border-b border-slate-700">
+                              <span className="text-xs text-slate-400">이 카드만 즉시 실행:</span>
+                              <Btn color="indigo" onClick={() => runCardNow(c.key, "plan")}>plan</Btn>
+                              <Btn color="indigo" onClick={() => runCardNow(c.key, "build")}>build</Btn>
+                              <span className="text-xs text-slate-400 ml-3">Claude 실행 로그:</span>
+                              <Btn color="slate" onClick={() => showClaudeLog(c.key, "plan")}>plan</Btn>
+                              <Btn color="slate" onClick={() => showClaudeLog(c.key, "build")}>build</Btn>
                             </div>
-                          )}
-                        </td>
-                      </tr>
+                            {claudeLog && claudeLog.key === c.key && (
+                              <div className="mb-4">
+                                <div className="flex items-center justify-between mb-1"><span className="text-xs text-slate-400">Claude 실행 로그 — {claudeLog.phase} (3초 갱신)</span><button onClick={() => setClaudeLog(null)} className="text-[11px] text-slate-400 hover:text-rose-300">닫기</button></div>
+                                <pre className="bg-black/60 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 h-72 overflow-auto">{claudeLog.text || "(로그 없음)"}</pre>
+                              </div>
+                            )}
+                            <div className="text-xs text-slate-400 mb-1">원문 설명</div>
+                            <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
+                            <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
+                            <div className="space-y-2 mb-4 max-h-72 overflow-auto">
+                              {detail.comments.length === 0 ? <p className="text-slate-500 text-xs">코멘트 없음</p> : detail.comments.map((cm, i) => (
+                                <div key={i} className="bg-slate-800/60 border border-slate-700 rounded p-2">
+                                  <div className="flex items-center justify-between mb-1"><span className="text-[11px] text-slate-400">{cm.author} · {cm.created ? new Date(cm.created).toLocaleString() : ""}</span><button onClick={() => setReplyTarget({ author: cm.author, accountId: cm.accountId, snippet: (cm.body || "").slice(0, 280) })} className="text-[11px] text-indigo-400 hover:text-indigo-300">↳ 답글</button></div>
+                                  <div className="text-xs whitespace-pre-wrap text-slate-200">{cm.body}</div>
+                                </div>
+                              ))}
+                            </div>
+                            <div className="text-xs text-slate-400 mb-1">답변 작성</div>
+                            {replyTarget && <div className="flex items-center justify-between bg-indigo-500/10 border border-indigo-500/30 rounded px-2 py-1 mb-1 text-xs text-indigo-200"><span>↳ <b>{replyTarget.author}</b> 의 코멘트에 답글</span><button onClick={() => setReplyTarget(null)} className="text-slate-400 hover:text-rose-300">취소</button></div>}
+                            <textarea value={reply} onChange={(e) => setReply(e.target.value)} spellCheck={false} placeholder="질문에 대한 답변/추가 설계를 적으세요."
+                              className="w-full h-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+                            <div className="flex items-center justify-between mt-2">
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer"><input type="checkbox" checked={replyAnswered} onChange={(e) => setReplyAnswered(e.target.checked)} /><span>답변 완료로 표시 ({config.answeredLabel || "claude-answered"} → build 진행)</span></label>
+                              <Btn color="green" onClick={postReply} disabled={posting}>{posting ? "등록 중…" : "답변 등록"}</Btn>
+                            </div>
+                          </div>
+                        )}
+                      </td></tr>
                     )}
                   </React.Fragment>
                 );
@@ -581,26 +398,85 @@ function App() {
             </tbody>
           </table>
         )}
+      </div>
+    </Section>
+  );
+}
+
+// =================== 전체 앱 ===================
+function App() {
+  const [projects, setProjects] = useState(null);
+  const [status, setStatus] = useState({ plan: { running: false }, build: { running: false } });
+  const [logs, setLogs] = useState({ plan: "", build: "" });
+  const [history, setHistory] = useState([]);
+  const [toast, setToast] = useState("");
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2500); };
+
+  const loadProjects = async () => { const r = await api.get("/api/projects"); setProjects(r.projects || []); };
+  const loadHistory = async () => { const r = await api.get("/api/history?limit=100"); if (r.ok) setHistory(r.entries || []); };
+  useEffect(() => { loadProjects(); loadHistory(); api.get("/api/loops/status").then(setStatus); }, []);
+  useEffect(() => {
+    const t = setInterval(async () => {
+      setStatus(await api.get("/api/loops/status"));
+      for (const type of ["plan", "build"]) { const r = await api.get(`/api/logs/${type}?lines=120`); setLogs((p) => ({ ...p, [type]: r.log || "" })); }
+      loadHistory();
+    }, 4000);
+    return () => clearInterval(t);
+  }, []);
+
+  const toggleLoop = async (type) => { const running = status[type]?.running; const r = await api.post(`/api/loops/${type}/${running ? "stop" : "start"}`); flash(r.ok ? `${type} 루프 ${running ? "중지" : "시작"}` : (r.message || "실패")); setStatus(await api.get("/api/loops/status")); };
+  const runOnce = async (type) => { const r = await api.post(`/api/loops/${type}/run-once`); flash(r.ok ? `${type} 전체 즉시 실행 — 로그 확인` : (r.message || "실패")); };
+  const clearLog = async (type) => { if (!window.confirm(`loop-${type}.log 를 비울까요?`)) return; const r = await api.post(`/api/logs/${type}/clear`); if (r.ok) { setLogs((p) => ({ ...p, [type]: "" })); flash(`loop-${type}.log 비움`); } };
+  const addProject = async () => { const name = window.prompt("새 프로젝트 이름?"); if (!name) return; const r = await api.post("/api/projects", { name }); if (r.ok) { flash(`프로젝트 추가됨: ${r.project.id}`); loadProjects(); } };
+
+  if (!projects) return <div className="p-10">불러오는 중…</div>;
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <h1 className="text-2xl font-bold mb-1">Jira → Claude 자동화 대시보드</h1>
+      <p className="text-slate-400 text-sm mb-6">여러 프로젝트를 동시에 운용합니다. 루프는 한 주기마다 모든 프로젝트를 순회합니다.</p>
+      {toast && <div className="fixed top-4 right-4 bg-indigo-600 px-4 py-2 rounded-lg text-sm shadow-lg z-50">{toast}</div>}
+
+      {/* 루프 제어 (전역) */}
+      <Section title="루프 제어 (전 프로젝트 공통)" right={<Btn color="slate" onClick={loadProjects}>새로고침</Btn>}>
+        <div className="grid grid-cols-2 gap-4">
+          {["plan", "build"].map((type) => {
+            const running = status[type]?.running;
+            return (
+              <div key={type} className="bg-slate-800/60 border border-slate-700 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold">{type} 루프</span>
+                  <span className={`text-xs px-2 py-1 rounded-full border ${running ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-slate-600/30 text-slate-400 border-slate-600"}`}>{running ? `실행 중 (pid ${status[type].pid})` : "중지됨"}</span>
+                </div>
+                <div className="flex gap-2"><Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>{running ? "중지" : "시작"}</Btn><Btn color="indigo" onClick={() => runOnce(type)}>전체 실행</Btn></div>
+              </div>
+            );
+          })}
         </div>
+        <p className="text-xs text-slate-500 mt-3">한 사이클마다 등록된 모든 프로젝트를 순회합니다(프로젝트별 동시 상한 적용).</p>
       </Section>
 
-      {/* 처리 이력 */}
-      <Section title="처리 이력" collapsible defaultOpen right={<Btn color="slate" onClick={loadHistory}>새로고침</Btn>}>
-        {history.length === 0 ? (
-          <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다. (루프가 카드를 처리하면 history.jsonl 에 기록됩니다)</p>
-        ) : (
+      {/* 프로젝트들 */}
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-lg font-semibold">프로젝트 ({projects.length})</h2>
+        <Btn color="green" onClick={addProject}>+ 프로젝트 추가</Btn>
+      </div>
+      {projects.length === 0 && <p className="text-slate-500 text-sm mb-5">프로젝트가 없습니다. "+ 프로젝트 추가"로 시작하세요.</p>}
+      {projects.map((p) => <ProjectCard key={p.id} proj={p} flash={flash} onDeleted={() => { flash("프로젝트 삭제됨"); loadProjects(); }} />)}
+
+      {/* 처리 이력 (전역) */}
+      <Section title="처리 이력 (전 프로젝트)" collapsible defaultOpen right={<Btn color="slate" onClick={loadHistory}>새로고침</Btn>}>
+        {history.length === 0 ? <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다.</p> : (
           <table className="w-full text-sm">
-            <thead><tr className="text-slate-400 text-left border-b border-slate-700">
-              <th className="py-2">시각</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th>
-            </tr></thead>
+            <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">시각</th><th>프로젝트</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
             <tbody>
               {history.map((h, i) => {
                 const [label, cls] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
                 return (
                   <tr key={i} className="border-b border-slate-800">
                     <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
-                    <td className="text-slate-200">{h.key}</td>
-                    <td className="text-slate-300">{h.phase}</td>
+                    <td className="text-slate-400">{h.project || "-"}</td>
+                    <td className="text-slate-200">{h.key}</td><td className="text-slate-300">{h.phase}</td>
                     <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
                     <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
                     <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
@@ -612,17 +488,14 @@ function App() {
         )}
       </Section>
 
-      {/* 로그 */}
-      <Section title="실시간 로그" collapsible defaultOpen>
+      {/* 실시간 로그 (전역) */}
+      <Section title="실시간 로그 (전 프로젝트)" collapsible defaultOpen>
         <div className="grid grid-cols-2 gap-4">
           {["plan", "build"].map((type) => (
             <div key={type}>
               <div className="flex items-center justify-between mb-1">
                 <span className="text-sm text-slate-400">loop-{type}.log</span>
-                <button onClick={() => clearLog(type)}
-                  className="text-xs text-slate-400 hover:text-rose-300 border border-slate-600 hover:border-rose-500/50 rounded px-2 py-0.5 transition">
-                  비우기
-                </button>
+                <button onClick={() => clearLog(type)} className="text-xs text-slate-400 hover:text-rose-300 border border-slate-600 hover:border-rose-500/50 rounded px-2 py-0.5 transition">비우기</button>
               </div>
               <pre className="bg-black/60 border border-slate-700 rounded-lg p-3 text-xs h-64 overflow-auto whitespace-pre-wrap">{logs[type] || "(비어 있음)"}</pre>
             </div>
@@ -638,17 +511,14 @@ function App() {
 ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 
-  <!-- 라이브 리로드: 프론트 파일 변경 시 자동 새로고침, 백엔드 재시작 시 재연결되며 새로고침 -->
+  <!-- 라이브 리로드 -->
   <script>
   (function () {
     var es, connectedBefore = false;
     function connect() {
       try { es = new EventSource("/api/livereload"); } catch (e) { return; }
       es.onmessage = function () { location.reload(); };
-      es.onopen = function () {
-        if (connectedBefore) location.reload(); // 백엔드 재시작 후 재연결 → 새로고침
-        connectedBefore = true;
-      };
+      es.onopen = function () { if (connectedBefore) location.reload(); connectedBefore = true; };
       es.onerror = function () { try { es.close(); } catch (e) {} setTimeout(connect, 1000); };
     }
     connect();
