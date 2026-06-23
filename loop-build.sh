@@ -21,7 +21,7 @@ INTERVAL="${LOOP_INTERVAL:-3600}"   # 기본 1시간
 MAX_PARALLEL="${MAX_PARALLEL:-3}"   # 동시에 처리할 카드 수 상한
 LOG="${HERE}/loop-build.log"
 
-echo "[$(date '+%F %T')] loop-build 시작 (interval=${INTERVAL}s, max_parallel=${MAX_PARALLEL})" | tee -a "${LOG}"
+echo "[$(date '+%F %T')] loop-build 시작 (interval=${INTERVAL}s, max_parallel=${MAX_PARALLEL})${RUN_ONCE:+ [즉시 1회 실행]}" | tee -a "${LOG}"
 
 while true; do
   echo "[$(date '+%F %T')] build 대상 탐지..." | tee -a "${LOG}"
@@ -39,6 +39,12 @@ while true; do
     wait   # 이번 주기의 모든 build 작업 완료 대기
   else
     echo "[$(date '+%F %T')] build 대상 없음" | tee -a "${LOG}"
+  fi
+
+  # 즉시 실행 모드: 1회 처리 후 종료
+  if [[ -n "${RUN_ONCE:-}" ]]; then
+    echo "[$(date '+%F %T')] RUN_ONCE: build 1회 실행 완료, 종료" | tee -a "${LOG}"
+    break
   fi
 
   # 다음 정시(인터벌 경계)까지 정렬해서 대기

@@ -152,6 +152,10 @@ function App() {
     flash(r.ok ? `${type} 루프 ${running ? "중지" : "시작"}` : (r.message || "실패"));
     setStatus(await api.get("/api/loops/status"));
   };
+  const runOnce = async (type) => {
+    const r = await api.post(`/api/loops/${type}/run-once`);
+    flash(r.ok ? `${type} 즉시 실행 시작 — 로그를 확인하세요` : (r.message || "실패"));
+  };
   const loadCards = async () => {
     const r = await api.get("/api/cards");
     if (r.ok) { setCards(r.issues); setCardsErr(""); }
@@ -272,9 +276,12 @@ function App() {
                     {running ? `실행 중 (pid ${status[type].pid})` : "중지됨"}
                   </span>
                 </div>
-                <Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>
-                  {running ? "중지" : "시작"}
-                </Btn>
+                <div className="flex gap-2">
+                  <Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>
+                    {running ? "중지" : "시작"}
+                  </Btn>
+                  <Btn color="indigo" onClick={() => runOnce(type)}>지금 실행</Btn>
+                </div>
               </div>
             );
           })}

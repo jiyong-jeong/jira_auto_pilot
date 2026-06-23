@@ -119,6 +119,15 @@ if [[ "${PHASE}" == "build" ]] && ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
+# ===== 동시 실행 방지 락 (스케줄 루프 + 즉시 실행이 같은 카드를 중복 처리하지 않도록) =====
+mkdir -p "${CLONE_BASE}/.state"
+LOCK_DIR="${CLONE_BASE}/.state/${ISSUE_KEY}.lock"
+if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+  echo "SKIP: [${ISSUE_KEY}] 이미 처리 중(lock) — 동시 실행 방지로 종료"
+  exit 0
+fi
+trap 'rmdir "${LOCK_DIR}" 2>/dev/null || true' EXIT
+
 # ===== 1) clone (없으면) =====
 mkdir -p "${CLONE_BASE}"
 if [[ ! -d "${REPO_DIR}/.git" ]]; then

@@ -148,6 +148,18 @@ function startLoop(type) {
   return { ok: true, pid: proc.pid };
 }
 
+// 즉시 1회 실행: 스케줄을 기다리지 않고 detect→처리를 한 번 수행(같은 loop-<type>.log 에 기록).
+// 스케줄 루프와 별개 프로세스이며 pidfile 을 쓰지 않는다(일회성). 카드 락으로 중복 처리는 방지됨.
+function runOnce(type) {
+  const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
+  if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
+  const env = scriptEnv();
+  env.RUN_ONCE = "1";
+  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env, detached: true, stdio: "ignore" });
+  proc.unref();
+  return { ok: true, pid: proc.pid };
+}
+
 function stopLoop(type) {
   const pid = readPid(type);
   if (!isAlive(pid)) {
@@ -384,6 +396,11 @@ app.post("/api/loops/:type/stop", (req, res) => {
   const { type } = req.params;
   if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(stopLoop(type));
+});
+app.post("/api/loops/:type/run-once", (req, res) => {
+  const { type } = req.params;
+  if (!["plan", "build"].includes(type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  res.json(runOnce(type));
 });
 
 // REST 기반 결정적 탐지 (루프가 claude 탐지 대신 우선 사용; 실패 시 claude 폴백)
