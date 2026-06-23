@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jira → Claude 자동화 대시보드</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style> body { background:#0b1020; } </style>
+</head>
+<body>
+  <div id="root" class="text-slate-100"></div>
+
+  <script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+const api = {
+  async get(p) { const r = await fetch(p); return r.json(); },
+  async post(p, body) {
+    const r = await fetch(p, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+    return r.json();
+  },
+};
+
+function Section({ title, children, right }) {
+  return (
+    <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-5 mb-5">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold">{title}</h2>
+        {right}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function Field({ label, value, onChange, type = "text", placeholder }) {
+  return (
+    <label className="block mb-3">
+      <span className="text-sm text-slate-400">{label}</span>
+      <input
+        type={type} value={value || ""} placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400"
+      />
+    </label>
+  );
+}
+
+function Btn({ children, onClick, color = "indigo", disabled }) {
+  const colors = {
+    indigo: "bg-indigo-600 hover:bg-indigo-500",
+    green: "bg-emerald-600 hover:bg-emerald-500",
+    red: "bg-rose-600 hover:bg-rose-500",
+    slate: "bg-slate-700 hover:bg-slate-600",
+  };
+  return (
+    <button onClick={onClick} disabled={disabled}
+      className={`${colors[color]} disabled:opacity-40 text-white text-sm font-medium px-4 py-2 rounded-lg transition`}>
+      {children}
+    </button>
+  );
+}
+
+const stageBadge = {
+  "plan-ready": ["질문 대기(plan)", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
+  "build-ready": ["개발 대기(build)", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
+  "done": ["완료(DEV COMPLETED)", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
+};
+
+function App() {
+  const [config, setConfig] = useState(null);
+  const [creds, setCreds] = useState(null);
+  const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "" });
+  const [status, setStatus] = useState({ plan: { running: false }, build: { running: false } });
+  const [logs, setLogs] = useState({ plan: "", build: "" });
+  const [cards, setCards] = useState([]);
+  const [cardsErr, setCardsErr] = useState("");
+  const [toast, setToast] = useState("");
+  const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
+
+  const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2500); };
+
+  const loadAll = useCallback(async () => {
+    setConfig(await api.get("/api/config"));
+    const c = await api.get("/api/credentials");
+    setCreds(c);
+    setCredInput((p) => ({ ...p, atlassianEmail: c.atlassianEmail || "" }));
+    setStatus(await api.get("/api/loops/status"));
+  }, []);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  // 폴링: 상태 + 로그
+  useEffect(() => {
+    const t = setInterval(async () => {
+      setStatus(await api.get("/api/loops/status"));
+      for (const type of ["plan", "build"]) {
+        const r = await api.get(`/api/logs/${type}?lines=120`);
+        setLogs((p) => ({ ...p, [type]: r.log || "" }));
+      }
+    }, 4000);
+    return () => clearInterval(t);
+  }, []);
+
+  const saveConfig = async () => { await api.post("/api/config", config); flash("설정 저장됨"); };
+  const saveCreds = async () => {
+    await api.post("/api/credentials", credInput);
+    setCredInput((p) => ({ ...p, anthropicApiKey: "", githubToken: "", atlassianToken: "" }));
+    setCreds(await api.get("/api/credentials"));
+    flash("자격증명 저장됨");
+  };
+  const toggleLoop = async (type) => {
+    const running = status[type]?.running;
+    const r = await api.post(`/api/loops/${type}/${running ? "stop" : "start"}`);
+    flash(r.ok ? `${type} 루프 ${running ? "중지" : "시작"}` : (r.message || "실패"));
+    setStatus(await api.get("/api/loops/status"));
+  };
+  const loadCards = async () => {
+    const r = await api.get("/api/cards");
+    if (r.ok) { setCards(r.issues); setCardsErr(""); }
+    else { setCardsErr(r.message || "조회 실패"); }
+  };
+  const loadEnv = async () => {
+    const r = await api.get("/api/env");
+    if (r.ok) setEnvFile({ path: r.path, content: r.content, mtime: r.mtime, exists: r.exists, loaded: true });
+    else flash(r.message || "env 로드 실패");
+  };
+  const saveEnv = async () => {
+    const r = await api.post("/api/env", { content: envFile.content });
+    if (r.ok) { flash("work.env 저장됨 (.bak 백업 생성)"); setEnvFile((p) => ({ ...p, mtime: r.mtime, exists: true })); }
+    else flash(r.message || "저장 실패");
+  };
+
+  if (!config || !creds) return <div className="p-10">불러오는 중…</div>;
+
+  const credSet = (k) => creds[k] === true;
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-8">
+      <h1 className="text-2xl font-bold mb-1">Jira → Claude 자동화 대시보드</h1>
+      <p className="text-slate-400 text-sm mb-6">workspace·repo·주기를 설정하고 plan/build 루프를 제어·모니터링합니다.</p>
+
+      {toast && <div className="fixed top-4 right-4 bg-indigo-600 px-4 py-2 rounded-lg text-sm shadow-lg z-50">{toast}</div>}
+
+      {/* 제어 */}
+      <Section title="루프 제어"
+        right={<Btn color="slate" onClick={loadAll}>새로고침</Btn>}>
+        <div className="grid grid-cols-2 gap-4">
+          {["plan", "build"].map((type) => {
+            const running = status[type]?.running;
+            return (
+              <div key={type} className="bg-slate-800/60 border border-slate-700 rounded-lg p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-semibold">{type} 루프</span>
+                  <span className={`text-xs px-2 py-1 rounded-full border ${running ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/40" : "bg-slate-600/30 text-slate-400 border-slate-600"}`}>
+                    {running ? `실행 중 (pid ${status[type].pid})` : "중지됨"}
+                  </span>
+                </div>
+                <Btn color={running ? "red" : "green"} onClick={() => toggleLoop(type)}>
+                  {running ? "중지" : "시작"}
+                </Btn>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-xs text-slate-500 mt-3">시작 시 즉시 1회 탐지 후, 설정된 주기(정시 정렬)로 반복합니다.</p>
+      </Section>
+
+      {/* 설정 */}
+      <Section title="프로젝트 설정" right={<Btn onClick={saveConfig}>저장</Btn>}>
+        <div className="grid grid-cols-2 gap-x-5">
+          <Field label="GitHub Repository URL" value={config.repoUrl} onChange={(v) => setConfig({ ...config, repoUrl: v })} placeholder="https://github.com/Org/repo.git" />
+          <Field label="Base 브랜치" value={config.baseBranch} onChange={(v) => setConfig({ ...config, baseBranch: v })} />
+          <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net" />
+          <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
+          <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
+          <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })} />
+          <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
+          <Field label="완료 상태명" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} />
+          <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
+          <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
+          <Field label="작업 폴더 (WORK_DIR)" value={config.workDir} onChange={(v) => setConfig({ ...config, workDir: v })} />
+          <Field label="env 파일 경로 (work.env)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="/path/to/work.env" />
+          <Field label="clone 베이스 폴더" value={config.cloneBase} onChange={(v) => setConfig({ ...config, cloneBase: v })} placeholder="/path/to/repos" />
+        </div>
+      </Section>
+
+      {/* 자격증명 */}
+      <Section title="자격증명 (로컬 저장)" right={<Btn onClick={saveCreds}>저장</Btn>}>
+        <p className="text-xs text-amber-300/80 mb-3">⚠ 토큰은 이 컴퓨터의 credentials.json(권한 600)에 저장됩니다. 입력란을 비워두면 기존 값이 유지됩니다.</p>
+        <div className="grid grid-cols-2 gap-x-5">
+          <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓ 저장됨" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."} />
+          <Field label={`GitHub Token ${credSet("githubToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.githubToken} onChange={(v) => setCredInput({ ...credInput, githubToken: v })} placeholder={credSet("githubToken") ? "••• 저장됨" : "ghp_..."} />
+          <Field label="Atlassian 이메일" value={credInput.atlassianEmail} onChange={(v) => setCredInput({ ...credInput, atlassianEmail: v })} placeholder="you@company.com" />
+          <Field label={`Atlassian API Token ${credSet("atlassianToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.atlassianToken} onChange={(v) => setCredInput({ ...credInput, atlassianToken: v })} placeholder={credSet("atlassianToken") ? "••• 저장됨" : "Atlassian API token"} />
+        </div>
+      </Section>
+
+      {/* work.env 편집 */}
+      <Section title="work.env 파일"
+        right={<div className="flex gap-2"><Btn color="slate" onClick={loadEnv}>불러오기</Btn><Btn color="green" onClick={saveEnv} disabled={!envFile.loaded}>저장</Btn></div>}>
+        <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
+          <span>경로: <span className="text-slate-300">{envFile.path || config.envPath}</span></span>
+          <span>{envFile.loaded ? (envFile.exists ? `수정: ${new Date(envFile.mtime).toLocaleString()}` : "파일 없음 (저장 시 생성)") : "불러오기를 눌러 내용을 편집하세요"}</span>
+        </div>
+        <textarea
+          value={envFile.content}
+          onChange={(e) => setEnvFile({ ...envFile, content: e.target.value })}
+          disabled={!envFile.loaded}
+          spellCheck={false}
+          placeholder={envFile.loaded ? "KEY=VALUE 형식" : "‘불러오기’ 후 편집 가능"}
+          className="w-full h-72 bg-black/60 border border-slate-700 rounded-lg p-3 text-xs font-mono disabled:opacity-50 focus:outline-none focus:border-indigo-400"
+        />
+        <p className="text-xs text-amber-300/80 mt-2">⚠ 시크릿 파일입니다. 저장 시 기존 파일은 .bak 으로 백업되며, 대상 repo로 복사될 때 커밋되지 않도록 .gitignore 에 포함되어야 합니다.</p>
+      </Section>
+
+      {/* 카드 상태 */}
+      <Section title="카드 상태" right={<Btn color="slate" onClick={loadCards}>조회</Btn>}>
+        {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
+        {cards.length === 0 ? (
+          <p className="text-slate-500 text-sm">조회 버튼을 눌러 {config.triggerText} 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead><tr className="text-slate-400 text-left border-b border-slate-700">
+              <th className="py-2">키</th><th>요약</th><th>상태</th><th>단계</th>
+            </tr></thead>
+            <tbody>
+              {cards.map((c) => {
+                const [label, cls] = stageBadge[c.stage] || ["-", ""];
+                return (
+                  <tr key={c.key} className="border-b border-slate-800">
+                    <td className="py-2"><a href={c.url} target="_blank" className="text-indigo-400 hover:underline">{c.key}</a></td>
+                    <td className="pr-3">{c.summary}</td>
+                    <td className="text-slate-300">{c.status}</td>
+                    <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Section>
+
+      {/* 로그 */}
+      <Section title="실시간 로그">
+        <div className="grid grid-cols-2 gap-4">
+          {["plan", "build"].map((type) => (
+            <div key={type}>
+              <div className="text-sm text-slate-400 mb-1">loop-{type}.log</div>
+              <pre className="bg-black/60 border border-slate-700 rounded-lg p-3 text-xs h-64 overflow-auto whitespace-pre-wrap">{logs[type] || "(비어 있음)"}</pre>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <p className="text-center text-slate-600 text-xs mt-6">로컬 전용 · 토큰은 외부로 전송되지 않습니다</p>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

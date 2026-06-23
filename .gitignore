@@ -1,0 +1,21 @@
+# 비밀 / 런타임 설정
+*.env
+dashboard/config.json
+dashboard/credentials.json
+
+# clone 된 작업 디렉토리 (대상 repo들이 모이는 곳)
+repos/
+# (구버전 호환) 과거 평면 clone 디렉토리
+kyb-api/
+kyb-api-*/
+*-[A-Z]*-[0-9]*/
+
+# 로그
+*.log
+
+# 의존성
+node_modules/
+
+# OS / 로컬
+.DS_Store
+.claude/

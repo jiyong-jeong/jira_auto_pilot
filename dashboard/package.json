@@ -1,0 +1,16 @@
+{
+  "name": "jira-claude-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Jira -> Claude 루프 자동화 제어/모니터링 대시보드 (React + Express)",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
