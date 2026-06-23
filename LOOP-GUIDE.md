@@ -22,7 +22,7 @@ plan(질문) → build(개발·PR·완료처리) 두 루프로 처리합니다. 
 [claude-planned + claude-answered 라벨 있음]
         │  loop-build →  (라벨/답변 없으면 SKIP, 다음 주기 재시도)
         │             →  답변 있으면 개발 → 브랜치/커밋/푸시 → base 브랜치로 PR
-        │             →  완료 요약 기입(label 모드: 코멘트) → 상태를 DEV COMPLETED 로 전환
+        │             →  완료 요약 기입(label 모드: 카드 설명 하단) → 상태를 DEV COMPLETED 로 전환
         ▼
 [DEV COMPLETED] → 두 루프 모두 탐지에서 자동 제외
 ```
