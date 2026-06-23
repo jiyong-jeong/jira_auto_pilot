@@ -76,7 +76,10 @@ if [[ "${TRIGGER_MODE}" == "text" ]]; then
       요약에는 변경 내용 요약, PR URL, 브랜치명, 완료 일시를 포함하세요. ('${TRIGGER_TEXT}' 텍스트 자체는 유지)"
 else
   TRIGGER_DESC="'${TRIGGER_LABEL}' 라벨이 붙어 있는지"
-  SUMMARY_INSTR="이슈 ${ISSUE_KEY} 에 완료 요약을 코멘트로 남기세요.
+  SUMMARY_INSTR="완료 요약을 두 곳에 모두 작성하세요.
+      (1) 이슈 ${ISSUE_KEY} 에 코멘트로 남기고,
+      (2) 이슈 '설명(description)' 의 '맨 아래'에도 덧붙이세요. 기존 설명 내용은 절대 지우지 말고 그대로 보존한 뒤,
+          마지막에 '---' 구분선과 '## 완료 내역' 제목을 두고 그 아래에 요약을 추가하세요.
       요약에는 변경 내용 요약, PR URL, 브랜치명, 완료 일시를 포함하세요."
 fi
 
