@@ -11,7 +11,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "25mb" })); // 이미지(base64) 첨부 페이로드 허용
 
 const PORT = process.env.PORT || 4317;
 const ROOT = __dirname;                       // dashboard 폴더
@@ -223,6 +223,46 @@ async function jiraReq(method, urlPath, body) {
   return txt ? JSON.parse(txt) : {};
 }
 
+// Jira 이슈에 파일(이미지) 첨부. base64(data URL 허용) → multipart 업로드.
+async function jiraAttach(issueKey, filename, dataBase64, contentType) {
+  const cfg = getConfig();
+  const cred = getCreds();
+  if (!cred.atlassianEmail || !cred.atlassianToken) throw new Error("Atlassian 자격증명 없음");
+  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
+  const buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ""), "base64");
+  const form = new FormData();
+  form.append("file", new Blob([buf], { type: contentType || "application/octet-stream" }), filename || "attachment");
+  const res = await fetch(`https://${cfg.jiraSite}/rest/api/3/issue/${encodeURIComponent(issueKey)}/attachments`, {
+    method: "POST",
+    headers: { Authorization: `Basic ${auth}`, "X-Atlassian-Token": "no-check" }, // 멀티파트 Content-Type 은 fetch 가 자동 설정
+    body: form,
+  });
+  const txt = await res.text();
+  if (!res.ok) throw new Error(`${res.status}: ${txt.slice(0, 200)}`);
+}
+
+// claude CLI 헤드리스 실행(설명 정리 등). ANTHROPIC_API_KEY 있으면 주입, 없으면 로컬 로그인.
+function runClaude(prompt, timeoutMs = 120000) {
+  return new Promise((resolve, reject) => {
+    const cred = getCreds();
+    const env = { ...process.env };
+    if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
+    let child;
+    try { child = spawn("claude", ["-p", prompt], { env }); }
+    catch (e) { return reject(new Error("claude 실행 실패: " + e.message)); }
+    let out = "", err = "";
+    const timer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} reject(new Error("claude 응답 시간 초과")); }, timeoutMs);
+    child.stdout.on("data", (d) => (out += d));
+    child.stderr.on("data", (d) => (err += d));
+    child.on("error", (e) => { clearTimeout(timer); reject(new Error("claude 실행 실패(설치/PATH 확인): " + e.message)); });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(out.trim());
+      else reject(new Error(`claude 종료 코드 ${code}: ${err.slice(0, 300)}`));
+    });
+  });
+}
+
 // 평문 설명 → Atlassian Document Format(ADF) 변환(REST v3 description 필드용)
 function toADF(text) {
   const lines = String(text).split("\n");
@@ -387,6 +427,31 @@ app.get("/api/jira/meta", async (req, res) => {
   }
 });
 
+// ----- 카드 등록: 러프 설명 → Claude 가 체계적 설명으로 변환 -----
+app.post("/api/ai/refine-description", async (req, res) => {
+  try {
+    const b = req.body || {};
+    const text = String(b.text || "").trim();
+    const summary = String(b.summary || "").trim();
+    if (!text) throw new Error("변환할 설명을 입력하세요.");
+    const prompt = `다음은 작성자가 러프하게 적은 Jira 작업 설명입니다. 개발 담당자가 보기 좋은 체계적인 한국어 설명으로 정리하세요.
+
+규칙:
+- 입력에 없는 사실/요구사항을 지어내지 마세요. 모호한 부분은 "(확인 필요)" 로 표시하세요.
+- 다음 구조를 사용하세요: "## 배경/목적", "## 요구사항"(번호 목록), "## 완료 조건"(- [ ] 체크리스트).
+- 결과 본문(마크다운)만 출력하세요. 머리말·맺음말·설명 등 본문 외 텍스트는 절대 출력하지 마세요.
+
+[제목] ${summary || "(없음)"}
+[러프 설명]
+${text}`;
+    const refined = await runClaude(prompt);
+    if (!refined) throw new Error("변환 결과가 비어 있습니다.");
+    res.json({ ok: true, description: refined });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: String(e.message || e) });
+  }
+});
+
 // ----- 카드 등록: 생성 -----
 app.post("/api/jira/issue", async (req, res) => {
   try {
@@ -409,7 +474,14 @@ app.post("/api/jira/issue", async (req, res) => {
       if (me.accountId) fields.assignee = { accountId: me.accountId };
     }
     const created = await jiraReq("POST", "/rest/api/3/issue", { fields });
-    res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}` });
+    // 이미지 등 첨부(있으면 생성 직후 업로드)
+    const atts = Array.isArray(b.attachments) ? b.attachments : [];
+    const attached = [], attachErrors = [];
+    for (const a of atts) {
+      try { await jiraAttach(created.key, a.filename, a.dataBase64, a.contentType); attached.push(a.filename || "file"); }
+      catch (e) { attachErrors.push(`${a.filename || "file"}: ${e.message}`); }
+    }
+    res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}`, attached, attachErrors });
   } catch (e) {
     res.status(500).json({ ok: false, message: String(e.message || e) });
   }

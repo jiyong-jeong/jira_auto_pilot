@@ -101,8 +101,9 @@ function App() {
   const [cardsErr, setCardsErr] = useState("");
   const [history, setHistory] = useState([]);
   const [jiraMeta, setJiraMeta] = useState({ issueTypes: [], epics: [], loaded: false, err: "" });
-  const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true });
+  const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [] });
   const [creating, setCreating] = useState(false);
+  const [refining, setRefining] = useState(false);
   const [toast, setToast] = useState("");
   const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
 
@@ -168,6 +169,24 @@ function App() {
       setJiraMeta({ issueTypes: [], epics: [], loaded: true, err: r.message || "메타 조회 실패" });
     }
   };
+  const refineDesc = async () => {
+    if (!newCard.description.trim()) { flash("정리할 설명을 먼저 입력하세요"); return; }
+    setRefining(true);
+    const r = await api.post("/api/ai/refine-description", { text: newCard.description, summary: newCard.summary });
+    setRefining(false);
+    if (r.ok) { setNewCard((p) => ({ ...p, description: r.description })); flash("Claude가 설명을 정리했습니다"); }
+    else flash(r.message || "변환 실패");
+  };
+  const pickImages = (fileList) => {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    Promise.all(files.map((f) => new Promise((resolve) => {
+      const rd = new FileReader();
+      rd.onload = () => resolve({ filename: f.name, contentType: f.type || "application/octet-stream", dataBase64: rd.result });
+      rd.readAsDataURL(f);
+    }))).then((arr) => setNewCard((p) => ({ ...p, attachments: [...p.attachments, ...arr] })));
+  };
+  const removeAttachment = (i) => setNewCard((p) => ({ ...p, attachments: p.attachments.filter((_, idx) => idx !== i) }));
   const createCard = async () => {
     if (!newCard.summary.trim()) { flash("요약을 입력하세요"); return; }
     setCreating(true);
@@ -175,11 +194,15 @@ function App() {
     const r = await api.post("/api/jira/issue", {
       summary: newCard.summary, description: newCard.description, issueType: newCard.issueType,
       parentKey, addTriggerLabel: newCard.addTriggerLabel, assignSelf: newCard.assignSelf,
+      attachments: newCard.attachments,
     });
     setCreating(false);
     if (r.ok) {
-      flash(`카드 생성됨: ${r.key}`);
-      setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "" }));
+      let msg = `카드 생성됨: ${r.key}`;
+      if (r.attached && r.attached.length) msg += ` · 첨부 ${r.attached.length}건`;
+      if (r.attachErrors && r.attachErrors.length) msg += ` · 첨부 실패 ${r.attachErrors.length}건`;
+      flash(msg);
+      setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "", attachments: [] }));
       loadCards(); loadMeta();
     } else { flash(r.message || "생성 실패"); }
   };
@@ -325,12 +348,35 @@ function App() {
           <Field label="또는 상위 키 직접 입력 (우선 적용)" value={newCard.parentInput} onChange={(v) => setNewCard({ ...newCard, parentInput: v })} placeholder="예: EKYB-123 (에픽/부모 카드)"
             info="입력하면 위 드롭다운보다 우선합니다. 에픽 또는 부모 이슈의 키를 넣으세요. 하위(subtask) 타입은 부모 카드 키가 필요합니다." />
         </div>
-        <label className="block mb-3">
-          <span className="text-sm text-slate-400">설명</span>
+        <div className="mb-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-sm text-slate-400">설명</span>
+            <Btn color="slate" onClick={refineDesc} disabled={refining || !newCard.description.trim()}>
+              {refining ? "정리 중…" : "✨ Claude로 정리"}
+            </Btn>
+          </div>
           <textarea value={newCard.description} onChange={(e) => setNewCard({ ...newCard, description: e.target.value })}
-            spellCheck={false} placeholder="작업 내용/스펙"
-            className="mt-1 w-full h-28 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
-        </label>
+            spellCheck={false} placeholder="작업 내용을 러프하게 적고 'Claude로 정리'를 누르면 배경/요구사항/완료조건으로 구조화됩니다."
+            className="w-full h-40 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+        </div>
+
+        {/* 이미지 첨부 */}
+        <div className="mb-3">
+          <span className="text-sm text-slate-400">이미지 첨부</span>
+          <input type="file" accept="image/*" multiple onChange={(e) => { pickImages(e.target.files); e.target.value = ""; }}
+            className="mt-1 block w-full text-sm text-slate-300 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:bg-slate-700 file:text-slate-100 hover:file:bg-slate-600 cursor-pointer" />
+          {newCard.attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 mt-2">
+              {newCard.attachments.map((a, i) => (
+                <span key={i} className="inline-flex items-center gap-1 text-xs bg-slate-700/60 border border-slate-600 rounded-full px-2 py-1">
+                  🖼 {a.filename}
+                  <button onClick={() => removeAttachment(i)} className="text-slate-400 hover:text-rose-300 ml-1">✕</button>
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="text-xs text-slate-500 mt-1">카드 생성 직후 Jira 첨부로 업로드됩니다. (개당 약 20MB 이하 권장)</p>
+        </div>
         <div className="flex items-center gap-5 mb-3 text-sm text-slate-300">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={newCard.addTriggerLabel} onChange={(e) => setNewCard({ ...newCard, addTriggerLabel: e.target.checked })} />
