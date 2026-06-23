@@ -265,7 +265,9 @@ if command -v node >/dev/null 2>&1 && [[ -f "${SELF_DIR}/render-claude-stream.js
   claude -p "${PROMPT}" --output-format stream-json --verbose 2>>"${CLAUDE_LOG}" \
     | node "${SELF_DIR}/render-claude-stream.js" "${CLAUDE_LOG}" \
     | tee "${CLAUDE_OUT}"
-  CSTATUS=${PIPESTATUS[0]}; RSTATUS=${PIPESTATUS[1]}
+  # PIPESTATUS 는 다음 명령에서 리셋되므로 한 번에 배열로 캡처(세미콜론 분리 금지)
+  PIPE_ST=("${PIPESTATUS[@]}")
+  CSTATUS=${PIPE_ST[0]:-1}; RSTATUS=${PIPE_ST[1]:-0}
   [[ "${CSTATUS}" -eq 0 && "${RSTATUS}" -eq 0 ]]; CLAUDE_OK=$?
 else
   claude -p "${PROMPT}" 2>&1 | tee "${CLAUDE_OUT}"
