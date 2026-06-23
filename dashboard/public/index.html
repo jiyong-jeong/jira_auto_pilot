@@ -104,6 +104,12 @@ function App() {
   const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [] });
   const [creating, setCreating] = useState(false);
   const [refining, setRefining] = useState(false);
+  const [expandedKey, setExpandedKey] = useState("");
+  const [detail, setDetail] = useState(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [reply, setReply] = useState("");
+  const [replyAnswered, setReplyAnswered] = useState(true);
+  const [posting, setPosting] = useState(false);
   const [toast, setToast] = useState("");
   const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
 
@@ -149,6 +155,26 @@ function App() {
     const r = await api.get("/api/cards");
     if (r.ok) { setCards(r.issues); setCardsErr(""); }
     else { setCardsErr(r.message || "조회 실패"); }
+  };
+  const toggleCard = async (key) => {
+    if (expandedKey === key) { setExpandedKey(""); setDetail(null); return; }
+    setExpandedKey(key); setDetail(null); setReply(""); setReplyAnswered(true); setDetailLoading(true);
+    const r = await api.get(`/api/jira/issue/${key}`);
+    setDetailLoading(false);
+    setDetail(r.ok ? r : { error: r.message || "조회 실패" });
+  };
+  const postReply = async () => {
+    if (!reply.trim()) { flash("답변 내용을 입력하세요"); return; }
+    setPosting(true);
+    const r = await api.post(`/api/jira/issue/${expandedKey}/comment`, { body: reply, markAnswered: replyAnswered });
+    setPosting(false);
+    if (r.ok) {
+      flash("답변 등록됨" + (replyAnswered ? " (claude-answered 라벨 추가)" : ""));
+      setReply("");
+      const d = await api.get(`/api/jira/issue/${expandedKey}`);
+      if (d.ok) setDetail(d);
+      loadCards();
+    } else flash(r.message || "등록 실패");
   };
   const loadHistory = async () => {
     const r = await api.get("/api/history?limit=100");
@@ -404,13 +430,57 @@ function App() {
             <tbody>
               {cards.map((c) => {
                 const [label, cls] = stageBadge[c.stage] || ["-", ""];
+                const open = expandedKey === c.key;
                 return (
-                  <tr key={c.key} className="border-b border-slate-800">
-                    <td className="py-2"><a href={c.url} target="_blank" className="text-indigo-400 hover:underline">{c.key}</a></td>
-                    <td className="pr-3">{c.summary}</td>
-                    <td className="text-slate-300">{c.status}</td>
-                    <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
-                  </tr>
+                  <React.Fragment key={c.key}>
+                    <tr className="border-b border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => toggleCard(c.key)}>
+                      <td className="py-2">
+                        <span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span>
+                        <a href={c.url} target="_blank" onClick={(e) => e.stopPropagation()} className="text-indigo-400 hover:underline">{c.key}</a>
+                      </td>
+                      <td className="pr-3">{c.summary}</td>
+                      <td className="text-slate-300">{c.status}</td>
+                      <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                    </tr>
+                    {open && (
+                      <tr className="border-b border-slate-800 bg-slate-900/50">
+                        <td colSpan={4} className="p-4">
+                          {detailLoading ? (
+                            <p className="text-slate-400 text-sm">불러오는 중…</p>
+                          ) : detail && detail.error ? (
+                            <p className="text-rose-400 text-sm">{detail.error}</p>
+                          ) : detail && (
+                            <div>
+                              <div className="text-xs text-slate-400 mb-1">원문 설명</div>
+                              <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
+                              <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
+                              <div className="space-y-2 mb-4 max-h-72 overflow-auto">
+                                {detail.comments.length === 0 ? (
+                                  <p className="text-slate-500 text-xs">코멘트 없음</p>
+                                ) : detail.comments.map((cm, i) => (
+                                  <div key={i} className="bg-slate-800/60 border border-slate-700 rounded p-2">
+                                    <div className="text-[11px] text-slate-400 mb-1">{cm.author} · {cm.created ? new Date(cm.created).toLocaleString() : ""}</div>
+                                    <div className="text-xs whitespace-pre-wrap text-slate-200">{cm.body}</div>
+                                  </div>
+                                ))}
+                              </div>
+                              <div className="text-xs text-slate-400 mb-1">답변 작성</div>
+                              <textarea value={reply} onChange={(e) => setReply(e.target.value)} spellCheck={false}
+                                placeholder="질문에 대한 답변/추가 설계를 적으세요. 등록하면 카드 코멘트로 달립니다."
+                                className="w-full h-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+                              <div className="flex items-center justify-between mt-2">
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input type="checkbox" checked={replyAnswered} onChange={(e) => setReplyAnswered(e.target.checked)} />
+                                  <span>답변 완료로 표시 ({config.answeredLabel || "claude-answered"} 라벨 추가 → build 진행)</span>
+                                </label>
+                                <Btn color="green" onClick={postReply} disabled={posting}>{posting ? "등록 중…" : "답변 등록"}</Btn>
+                              </div>
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })}
             </tbody>

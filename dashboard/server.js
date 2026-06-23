@@ -263,6 +263,21 @@ function runClaude(prompt, timeoutMs = 120000) {
   });
 }
 
+// ADF(Atlassian Document Format) → 읽기용 평문. 설명·코멘트 표시에 사용.
+function adfToText(node) {
+  if (!node) return "";
+  if (Array.isArray(node)) return node.map(adfToText).join("");
+  if (node.type === "text") return node.text || "";
+  if (node.type === "hardBreak") return "\n";
+  if (node.type === "mention") return "@" + (node.attrs && node.attrs.text ? node.attrs.text.replace(/^@/, "") : "");
+  if (node.type === "emoji") return (node.attrs && (node.attrs.shortName || node.attrs.text)) || "";
+  const inner = node.content ? adfToText(node.content) : "";
+  if (node.type === "listItem") return "• " + inner.replace(/\n+$/, "") + "\n";
+  const blocks = ["paragraph", "heading", "blockquote", "codeBlock", "rule", "panel"];
+  if (blocks.indexOf(node.type) !== -1) return inner + "\n";
+  return inner;
+}
+
 // 평문 설명 → Atlassian Document Format(ADF) 변환(REST v3 description 필드용)
 function toADF(text) {
   const lines = String(text).split("\n");
@@ -482,6 +497,50 @@ app.post("/api/jira/issue", async (req, res) => {
       catch (e) { attachErrors.push(`${a.filename || "file"}: ${e.message}`); }
     }
     res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}`, attached, attachErrors });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: String(e.message || e) });
+  }
+});
+
+// ----- 카드 상세: 원문 설명 + 코멘트 -----
+app.get("/api/jira/issue/:key", async (req, res) => {
+  try {
+    const cfg = getConfig();
+    const key = req.params.key;
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels`);
+    const cs = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/comment?maxResults=50`);
+    const comments = (cs.comments || []).map((c) => ({
+      author: (c.author && c.author.displayName) || "?",
+      created: c.created,
+      body: adfToText(c.body),
+    }));
+    res.json({
+      ok: true, key,
+      summary: issue.fields && issue.fields.summary,
+      status: issue.fields && issue.fields.status && issue.fields.status.name,
+      labels: (issue.fields && issue.fields.labels) || [],
+      description: adfToText(issue.fields && issue.fields.description),
+      comments,
+      url: `https://${cfg.jiraSite}/browse/${key}`,
+    });
+  } catch (e) {
+    res.status(500).json({ ok: false, message: String(e.message || e) });
+  }
+});
+
+// ----- 카드 상세: 답변(코멘트) 작성, 선택 시 claude-answered 라벨 추가 -----
+app.post("/api/jira/issue/:key/comment", async (req, res) => {
+  try {
+    const cfg = getConfig();
+    const key = req.params.key;
+    const body = String((req.body || {}).body || "").trim();
+    if (!body) throw new Error("답변 내용을 입력하세요.");
+    await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/comment`, { body: toADF(body) });
+    if ((req.body || {}).markAnswered) {
+      const label = cfg.answeredLabel || "claude-answered";
+      await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ add: label }] } });
+    }
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ ok: false, message: String(e.message || e) });
   }
