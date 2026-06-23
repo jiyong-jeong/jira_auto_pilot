@@ -24,14 +24,20 @@ const api = {
   },
 };
 
-function Section({ title, children, right }) {
+function Section({ title, children, right, collapsible, defaultOpen = false }) {
+  const [open, setOpen] = useState(collapsible ? defaultOpen : true);
+  const shown = !collapsible || open;
   return (
     <div className="bg-slate-900/70 border border-slate-700 rounded-xl p-5 mb-5">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold">{title}</h2>
-        {right}
+      <div className={`flex items-center justify-between ${shown ? "mb-4" : ""}`}>
+        <h2 className={`text-lg font-semibold ${collapsible ? "cursor-pointer select-none" : ""}`}
+          onClick={collapsible ? () => setOpen((o) => !o) : undefined}>
+          {collapsible && <span className="inline-block w-4 text-slate-500">{open ? "▾" : "▸"}</span>}
+          {title}
+        </h2>
+        {shown && right}
       </div>
-      {children}
+      {shown && children}
     </div>
   );
 }
@@ -312,7 +318,7 @@ function App() {
       </Section>
 
       {/* 설정 */}
-      <Section title="프로젝트 설정" right={<Btn onClick={saveConfig}>저장</Btn>}>
+      <Section title="프로젝트 설정" collapsible right={<Btn onClick={saveConfig}>저장</Btn>}>
         <div className="grid grid-cols-2 gap-x-5">
           <Field label="GitHub Repository URL" value={config.repoUrl} onChange={(v) => setConfig({ ...config, repoUrl: v })} placeholder="https://github.com/Org/repo.git" />
           <Field label="Base 브랜치" value={config.baseBranch} onChange={(v) => setConfig({ ...config, baseBranch: v })} />
@@ -347,7 +353,7 @@ function App() {
       </Section>
 
       {/* 자격증명 */}
-      <Section title="자격증명 (로컬 저장)" right={<Btn onClick={saveCreds}>저장</Btn>}>
+      <Section title="자격증명 (로컬 저장)" collapsible right={<Btn onClick={saveCreds}>저장</Btn>}>
         <p className="text-xs text-amber-300/80 mb-3">⚠ 토큰은 이 컴퓨터의 credentials.json(권한 600)에 저장됩니다. 입력란을 비워두면 기존 값이 유지됩니다.</p>
         <div className="grid grid-cols-2 gap-x-5">
           <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓ 저장됨" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."}
