@@ -18,6 +18,7 @@ const ROOT = __dirname;                       // dashboard 폴더
 const SCRIPTS_DIR = path.resolve(ROOT, ".."); // loop-work 폴더 (스크립트/로그 위치)
 const CONFIG_PATH = path.join(ROOT, "config.json");
 const CRED_PATH = path.join(ROOT, "credentials.json");
+const HISTORY_PATH = path.join(SCRIPTS_DIR, "history.jsonl"); // run-jira-claude.sh 가 기록하는 처리 이력
 
 // ----- 기본 설정값 (중립 기본값 — 대시보드에서 프로젝트별로 설정) -----
 const DEFAULT_CONFIG = {
@@ -88,6 +89,7 @@ function scriptEnv() {
   env.MAX_RETRIES = String(cfg.maxRetries || 3);
   env.TEST_CMD = cfg.testCmd || "";
   env.BUILD_CMD = cfg.buildCmd || "";
+  env.HISTORY_FILE = HISTORY_PATH;
   env.PROJECT_KEY = cfg.projectKey || "";
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
@@ -289,6 +291,18 @@ app.get("/api/cards", async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, message: String(e.message || e) });
   }
+});
+
+// ----- 처리 이력 -----
+app.get("/api/history", (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || "100", 10), 1000);
+  if (!fs.existsSync(HISTORY_PATH)) return res.json({ ok: true, entries: [] });
+  const lines = fs.readFileSync(HISTORY_PATH, "utf8").split("\n").filter(Boolean);
+  const entries = [];
+  for (const ln of lines) {
+    try { entries.push(JSON.parse(ln)); } catch {} // 깨진 줄은 건너뜀
+  }
+  res.json({ ok: true, entries: entries.reverse().slice(0, limit) }); // 최신순
 });
 
 // ----- work.env 모니터링/편집 -----

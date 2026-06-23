@@ -72,6 +72,13 @@ const stageBadge = {
   "done": ["완료(DEV COMPLETED)", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
 };
 
+const resultBadge = {
+  "success": ["성공", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
+  "skip": ["스킵(답변대기)", "bg-slate-500/20 text-slate-300 border-slate-500/40"],
+  "skip-idempotent": ["스킵(중복방지)", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
+  "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
+};
+
 function App() {
   const [config, setConfig] = useState(null);
   const [creds, setCreds] = useState(null);
@@ -80,6 +87,7 @@ function App() {
   const [logs, setLogs] = useState({ plan: "", build: "" });
   const [cards, setCards] = useState([]);
   const [cardsErr, setCardsErr] = useState("");
+  const [history, setHistory] = useState([]);
   const [toast, setToast] = useState("");
   const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
 
@@ -93,9 +101,9 @@ function App() {
     setStatus(await api.get("/api/loops/status"));
   }, []);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { loadAll(); loadHistory(); }, [loadAll]);
 
-  // 폴링: 상태 + 로그
+  // 폴링: 상태 + 로그 + 이력
   useEffect(() => {
     const t = setInterval(async () => {
       setStatus(await api.get("/api/loops/status"));
@@ -103,6 +111,7 @@ function App() {
         const r = await api.get(`/api/logs/${type}?lines=120`);
         setLogs((p) => ({ ...p, [type]: r.log || "" }));
       }
+      loadHistory();
     }, 4000);
     return () => clearInterval(t);
   }, []);
@@ -124,6 +133,10 @@ function App() {
     const r = await api.get("/api/cards");
     if (r.ok) { setCards(r.issues); setCardsErr(""); }
     else { setCardsErr(r.message || "조회 실패"); }
+  };
+  const loadHistory = async () => {
+    const r = await api.get("/api/history?limit=100");
+    if (r.ok) setHistory(r.entries || []);
   };
   const loadEnv = async () => {
     const r = await api.get("/api/env");
@@ -253,6 +266,34 @@ function App() {
                     <td className="pr-3">{c.summary}</td>
                     <td className="text-slate-300">{c.status}</td>
                     <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </Section>
+
+      {/* 처리 이력 */}
+      <Section title="처리 이력" right={<Btn color="slate" onClick={loadHistory}>새로고침</Btn>}>
+        {history.length === 0 ? (
+          <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다. (루프가 카드를 처리하면 history.jsonl 에 기록됩니다)</p>
+        ) : (
+          <table className="w-full text-sm">
+            <thead><tr className="text-slate-400 text-left border-b border-slate-700">
+              <th className="py-2">시각</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th>
+            </tr></thead>
+            <tbody>
+              {history.map((h, i) => {
+                const [label, cls] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
+                return (
+                  <tr key={i} className="border-b border-slate-800">
+                    <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
+                    <td className="text-slate-200">{h.key}</td>
+                    <td className="text-slate-300">{h.phase}</td>
+                    <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                    <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
+                    <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
                   </tr>
                 );
               })}

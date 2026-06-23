@@ -13,6 +13,9 @@ kyb-api-*/
 # 로그
 *.log
 
+# 처리 이력 (런타임 생성)
+history.jsonl
+
 # 의존성
 node_modules/
 

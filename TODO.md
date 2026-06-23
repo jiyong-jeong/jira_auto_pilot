@@ -79,10 +79,11 @@
   - 영향: `run-jira-claude.sh`, 설정 추가
   → (완료 2026-06-23) build 프롬프트에 PR 전 검증 단계 추가: 테스트 수단(`TEST_CMD` 또는 자동 감지)이 있으면 통과할 때까지 수정 반복(불가 시 PR 없이 종료), 없으면 빌드/컴파일(`BUILD_CMD` 또는 자동 감지)만 시도(수단 없으면 건너뜀). server.js `testCmd`/`buildCmd` 주입 + 대시보드 입력 필드. 리뷰어·라벨·Jira↔PR 양방향 링크는 범위에서 제외(추후).
 
-- [ ] **11. 처리 이력(History)**
+- [x] **11. 처리 이력(History)**
   - 내용: 처리한 카드/시각/결과/PR URL 기록.
   - AC: JSON 이력 파일 + 대시보드에 이력 표.
   - 영향: `dashboard/server.js`, `dashboard/public/index.html`
+  → (완료 2026-06-23) `run-jira-claude.sh` 가 매 실행 결과(성공/스킵/스킵-중복방지/실패 + PR·브랜치)를 `history.jsonl`(JSONL)에 기록. server.js `/api/history`(최신순) + `HISTORY_FILE` 주입, 대시보드에 처리 이력 표(4초 갱신) 추가. `history.jsonl` gitignore 등록.
 
 - [x] **12. 트리거 정밀도**
   - 내용: `text ~ "claude-work"`의 토큰화 오탐 가능성 제거.
