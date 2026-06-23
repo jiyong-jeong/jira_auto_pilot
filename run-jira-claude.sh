@@ -83,6 +83,16 @@ fi
 TEST_DESC="${TEST_CMD:-자동 감지(package.json scripts.test, pytest/pytest.ini, go test, Makefile 의 test 타깃 등)}"
 BUILD_DESC="${BUILD_CMD:-자동 감지(npm run build, tsc, go build, make 등 빌드/컴파일 수단)}"
 
+# ===== Slack 알림 (SLACK_WEBHOOK_URL 미설정 시 스킵) =====
+# 메시지는 토큰류(키/단계/URL/브랜치)와 고정 문구만 사용하므로 JSON 직접 구성이 안전.
+notify_slack() {
+  [[ -z "${SLACK_WEBHOOK_URL:-}" ]] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  local text="$1"
+  curl -fsS -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":\"${text}\"}" "${SLACK_WEBHOOK_URL}" >/dev/null 2>&1 || true
+}
+
 # ===== 처리 이력 기록 (JSONL 한 줄 추가) =====
 # 값은 이슈키/단계/결과/URL/브랜치 등 토큰류라 별도 JSON escape 없이 안전.
 record_history() {
@@ -232,6 +242,13 @@ if claude -p "${PROMPT}" 2>&1 | tee "${CLAUDE_OUT}"; then
   BRANCH_OUT="$(grep -oE "feature/${ISSUE_KEY}[A-Za-z0-9._/-]*" "${CLAUDE_OUT}" | head -n1 || true)"
   if grep -q 'SKIP:' "${CLAUDE_OUT}"; then RESULT="skip"; else RESULT="success"; fi
   record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
+  # 처리 완료 시 Slack 알림 (스킵은 알리지 않음)
+  if [[ "${RESULT}" == "success" ]]; then
+    MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
+    [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
+    [[ -n "${BRANCH_OUT}" ]] && MSG="${MSG} · branch: ${BRANCH_OUT}"
+    notify_slack "${MSG}"
+  fi
 else
   count=$(( $(cat "${FAIL_FILE}" 2>/dev/null || echo 0) + 1 ))
   echo "${count}" > "${FAIL_FILE}"
@@ -248,6 +265,7 @@ else
 ---
 ${ERR_TAIL}
 ---" || true
+    notify_slack "❌ [${ISSUE_KEY}] ${PHASE} 처리 실패 (${MAX_RETRIES}회 연속) — 수동 확인 필요"
   fi
   exit 1
 fi

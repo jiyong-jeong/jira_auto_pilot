@@ -82,7 +82,7 @@ const resultBadge = {
 function App() {
   const [config, setConfig] = useState(null);
   const [creds, setCreds] = useState(null);
-  const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "" });
+  const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" });
   const [status, setStatus] = useState({ plan: { running: false }, build: { running: false } });
   const [logs, setLogs] = useState({ plan: "", build: "" });
   const [cards, setCards] = useState([]);
@@ -119,7 +119,7 @@ function App() {
   const saveConfig = async () => { await api.post("/api/config", config); flash("설정 저장됨"); };
   const saveCreds = async () => {
     await api.post("/api/credentials", credInput);
-    setCredInput((p) => ({ ...p, anthropicApiKey: "", githubToken: "", atlassianToken: "" }));
+    setCredInput((p) => ({ ...p, anthropicApiKey: "", githubToken: "", atlassianToken: "", slackWebhookUrl: "" }));
     setCreds(await api.get("/api/credentials"));
     flash("자격증명 저장됨");
   };
@@ -227,7 +227,9 @@ function App() {
           <Field label={`GitHub Token ${credSet("githubToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.githubToken} onChange={(v) => setCredInput({ ...credInput, githubToken: v })} placeholder={credSet("githubToken") ? "••• 저장됨" : "ghp_..."} />
           <Field label="Atlassian 이메일" value={credInput.atlassianEmail} onChange={(v) => setCredInput({ ...credInput, atlassianEmail: v })} placeholder="you@company.com" />
           <Field label={`Atlassian API Token ${credSet("atlassianToken") ? "✓ 저장됨" : ""}`} type="password" value={credInput.atlassianToken} onChange={(v) => setCredInput({ ...credInput, atlassianToken: v })} placeholder={credSet("atlassianToken") ? "••• 저장됨" : "Atlassian API token"} />
+          <Field label={`Slack Incoming Webhook ${credSet("slackWebhookUrl") ? "✓ 저장됨" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."} />
         </div>
+        <p className="text-xs text-slate-500 mt-2">Slack Webhook 을 입력하면 카드가 처리 완료될 때마다 알림을 보냅니다. 비워두면 알림은 스킵됩니다.</p>
       </Section>
 
       {/* work.env 편집 */}

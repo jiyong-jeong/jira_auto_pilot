@@ -48,10 +48,11 @@
 
 ## 중간 우선순위 — 운영 편의
 
-- [ ] **6. 알림(Notification)**
+- [x] **6. 알림(Notification)**
   - 내용: PR 생성/완료/실패 시 Slack(또는 이메일) 알림.
   - AC: 설정한 웹훅으로 이벤트별 메시지 발송. 미설정 시 무시.
   - 영향: `run-jira-claude.sh` 또는 백엔드, 설정 추가
+  → (완료 2026-06-23) Slack Incoming Webhook 지원. `run-jira-claude.sh` 가 `SLACK_WEBHOOK_URL` 있으면 처리 완료(success)/최대재시도 실패 시 Slack 메시지 발송, 미설정 시 스킵. credentials.json 에 `slackWebhookUrl`(마스킹) 저장 + server.js 주입 + 대시보드 자격증명에 입력 필드. 연결 테스트 200 OK 확인. (이메일은 추후)
 
 - [x] **7. 답변 감지 명시적 신호**
   - 내용: "담당자 답변 여부"를 claude 판단에만 의존하지 않도록 명시적 신호 도입.

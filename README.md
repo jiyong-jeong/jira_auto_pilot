@@ -54,7 +54,8 @@ npm start          # http://localhost:4317
 `DONE_STATUS`(기본 DEV COMPLETED), `PLANNED_LABEL`(기본 claude-planned),
 `ANSWERED_LABEL`(기본 claude-answered), `FAILED_LABEL`(기본 claude-failed), `MAX_RETRIES`(기본 3),
 `ENV_SRC`(기본 work.env), `CLONE_BASE`(기본 repos/), `LOOP_INTERVAL`(기본 3600),
-`ANTHROPIC_API_KEY`, `GH_TOKEN`
+`MAX_PARALLEL`(기본 3), `TEST_CMD`/`BUILD_CMD`(미설정 시 자동 감지),
+`ANTHROPIC_API_KEY`, `GH_TOKEN`, `SLACK_WEBHOOK_URL`(설정 시 처리 완료/실패 알림)
 
 ## 보안
 

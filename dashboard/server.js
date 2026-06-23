@@ -65,6 +65,7 @@ function getCreds() {
     githubToken: "",
     atlassianEmail: "",
     atlassianToken: "",
+    slackWebhookUrl: "",
   });
 }
 
@@ -117,6 +118,7 @@ function scriptEnv() {
     env.GH_TOKEN = cred.githubToken;
     env.GITHUB_TOKEN = cred.githubToken;
   }
+  if (cred.slackWebhookUrl) env.SLACK_WEBHOOK_URL = cred.slackWebhookUrl;
   return env;
 }
 
@@ -240,6 +242,7 @@ app.get("/api/credentials", (req, res) => {
     githubToken: !!c.githubToken,
     atlassianEmail: c.atlassianEmail || "",
     atlassianToken: !!c.atlassianToken,
+    slackWebhookUrl: !!c.slackWebhookUrl,
   });
 });
 app.post("/api/credentials", (req, res) => {
@@ -257,6 +260,7 @@ app.post("/api/credentials", (req, res) => {
     githubToken: apply("githubToken"),
     atlassianEmail: b.atlassianEmail !== undefined ? b.atlassianEmail : cur.atlassianEmail,
     atlassianToken: apply("atlassianToken"),
+    slackWebhookUrl: apply("slackWebhookUrl"),
   };
   writeJson(CRED_PATH, next, 0o600);
   res.json({ ok: true });
