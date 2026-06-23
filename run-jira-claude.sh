@@ -123,6 +123,21 @@ if [[ "${PHASE}" == "plan" ]]; then
 - 코멘트 작성에 성공한 뒤, 이 이슈에 '${PLANNED_LABEL}' 라벨을 추가하세요.
   (이 라벨은 build 루프가 이 카드를 인식하고, plan 루프가 중복 처리하지 않도록 하는 표시입니다.)"
 else
+  # ===== 멱등성 가드: 이미 이 이슈로 만든 PR/원격 브랜치가 있으면 스킵 =====
+  # build 중간 실패 후 재시도 시 중복 브랜치/PR 생성을 방지한다.
+  EXISTING_BRANCH="$(git ls-remote --heads origin "feature/${ISSUE_KEY}-*" "feature/${ISSUE_KEY}" 2>/dev/null \
+    | awk '{print $2}' | sed 's#refs/heads/##' | head -n1 || true)"
+  EXISTING_PR=""
+  if command -v gh >/dev/null 2>&1; then
+    EXISTING_PR="$(gh pr list --state open --search "${ISSUE_KEY}" \
+      --json url,headRefName --jq '.[0].url' 2>/dev/null || true)"
+  fi
+  if [[ -n "${EXISTING_BRANCH}" || -n "${EXISTING_PR}" ]]; then
+    echo "SKIP: 이미 처리됨 — 이슈 ${ISSUE_KEY} 의 브랜치(${EXISTING_BRANCH:-없음}) / PR(${EXISTING_PR:-없음}) 존재. 중복 생성 방지를 위해 종료."
+    echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, skipped=idempotent)"
+    exit 0
+  fi
+
   echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR"
   claude -p "당신은 Jira 이슈 ${ISSUE_KEY} 를 ${REPO_NAME} 코드베이스에서 구현합니다. 작업 디렉토리는 현재 디렉토리입니다.
 
