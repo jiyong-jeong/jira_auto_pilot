@@ -65,10 +65,11 @@
   - 영향: `dashboard/server.js`, 운영 문서
   → (완료 2026-06-23) 루프 시작 시 `loop-<type>.pid` 에 pid 기록. status/stop 이 pidfile 을 단일 진실로 사용 → 백엔드 재시작 후 복구(시작 로그 보고), stale pidfile 자동 정리, stop 은 프로세스 그룹째 종료. DOCUMENTATION 7.4 에 launchd/pm2 자동 재시작 가이드 추가. `loop-*.pid` gitignore 등록.
 
-- [ ] **9. 병렬 처리 상한**
+- [x] **9. 병렬 처리 상한**
   - 내용: 매칭 카드가 많을 때 claude 프로세스 과다 생성 방지.
   - AC: 동시에 처리하는 카드 수 상한(예: 3) 적용.
   - 영향: `loop-plan.sh`, `loop-build.sh`
+  → (완료 2026-06-23) `MAX_PARALLEL`(기본 3) 도입. 두 루프가 카드 실행 전 `jobs -rp` 로 실행 중 작업 수를 확인해 상한 미만이 될 때까지 대기. server.js `maxParallel` 주입 + 대시보드 "동시 처리 상한" 입력 필드.
 
 ---
 

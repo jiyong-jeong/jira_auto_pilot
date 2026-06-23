@@ -18,9 +18,10 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTERVAL="${LOOP_INTERVAL:-3600}"   # 기본 1시간
+MAX_PARALLEL="${MAX_PARALLEL:-3}"   # 동시에 처리할 카드 수 상한
 LOG="${HERE}/loop-build.log"
 
-echo "[$(date '+%F %T')] loop-build 시작 (interval=${INTERVAL}s)" | tee -a "${LOG}"
+echo "[$(date '+%F %T')] loop-build 시작 (interval=${INTERVAL}s, max_parallel=${MAX_PARALLEL})" | tee -a "${LOG}"
 
 while true; do
   echo "[$(date '+%F %T')] build 대상 탐지..." | tee -a "${LOG}"
@@ -29,7 +30,9 @@ while true; do
   if [[ -n "${keys}" ]]; then
     while IFS= read -r key; do
       [[ -z "${key}" ]] && continue
-      echo "[$(date '+%F %T')] BUILD 실행: ${key}" | tee -a "${LOG}"
+      # 동시 실행 상한 유지: 실행 중 작업이 상한 미만이 될 때까지 대기
+      while (( $(jobs -rp | wc -l) >= MAX_PARALLEL )); do sleep 1; done
+      echo "[$(date '+%F %T')] BUILD 실행: ${key} (동시 상한 ${MAX_PARALLEL})" | tee -a "${LOG}"
       # 카드별 병렬 실행 (각자 <repo이름>-<key> 디렉토리)
       "${HERE}/run-jira-claude.sh" "${key}" build >>"${LOG}" 2>&1 &
     done <<< "${keys}"

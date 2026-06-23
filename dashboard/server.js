@@ -37,6 +37,7 @@ const DEFAULT_CONFIG = {
   answeredLabel: "claude-answered",             // 담당자 답변 완료 신호(build 진입 게이트)
   failedLabel: "claude-failed",                 // 반복 실패 카드 표시(탐지 제외)
   maxRetries: 3,                                // 연속 실패 N회 초과 시 실패 처리
+  maxParallel: 3,                               // 동시에 처리할 카드 수 상한
   testCmd: "",                                  // 테스트 명령(비우면 claude 자동 감지)
   buildCmd: "",                                 // 빌드 명령(비우면 claude 자동 감지)
   intervalSeconds: 3600,
@@ -109,6 +110,7 @@ function scriptEnv() {
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");
   env.LOOP_INTERVAL = String(cfg.intervalSeconds || 3600);
+  env.MAX_PARALLEL = String(cfg.maxParallel || 3);
   env.DASHBOARD_URL = `http://localhost:${PORT}`; // 루프가 REST 탐지를 호출할 주소
   if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
   if (cred.githubToken) {
