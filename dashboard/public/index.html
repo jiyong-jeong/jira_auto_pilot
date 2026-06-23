@@ -409,10 +409,13 @@ function App() {
             </div>
           )}
         </div>
-      </Section>
 
-      {/* Jira 카드 등록 */}
-      <Section title="Jira 카드 등록" collapsible right={<Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>}>
+        {/* Jira 카드 등록 — 프로젝트 설정에 종속 */}
+        <div className="mt-4 pt-4 border-t border-slate-700">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-slate-300">Jira 카드 등록</span>
+            <Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>
+          </div>
         {jiraMeta.err && <p className="text-rose-400 text-sm mb-2">{jiraMeta.err}</p>}
         {!config.projectKey && <p className="text-amber-300/80 text-sm mb-2">프로젝트 키를 먼저 설정·저장하세요.</p>}
         <div className="grid grid-cols-2 gap-x-5">
@@ -477,10 +480,14 @@ function App() {
         </div>
         <Btn color="green" onClick={createCard} disabled={creating || !config.projectKey}>{creating ? "생성 중…" : "카드 생성"}</Btn>
         <p className="text-xs text-slate-500 mt-2">자동화로 처리하려면 라벨 추가 + 나에게 할당을 켜두세요. (둘 다 충족해야 plan 루프가 탐지)</p>
-      </Section>
+        </div>
 
-      {/* 카드 상태 */}
-      <Section title="카드 상태" collapsible defaultOpen right={<Btn color="slate" onClick={loadCards}>조회</Btn>}>
+        {/* 카드 상태 — 프로젝트 설정에 종속 */}
+        <div className="mt-4 pt-4 border-t border-slate-700">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-slate-300">카드 상태</span>
+            <Btn color="slate" onClick={loadCards}>조회</Btn>
+          </div>
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
         {cards.length === 0 ? (
           <p className="text-slate-500 text-sm">조회 버튼을 눌러 {config.triggerMode === "text" ? config.triggerText : config.triggerLabel} 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
@@ -574,6 +581,7 @@ function App() {
             </tbody>
           </table>
         )}
+        </div>
       </Section>
 
       {/* 처리 이력 */}
