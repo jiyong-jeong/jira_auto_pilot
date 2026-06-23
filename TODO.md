@@ -26,10 +26,11 @@
   - 영향: `run-jira-claude.sh`, `detect-cards.sh`(JQL에 `claude-failed` 제외)
   → (완료 2026-06-23) 카드별 실패 카운터(`repos/.state/<KEY>.fail`) + `MAX_RETRIES`(기본 3) 초과 시 claude 로 `claude-failed` 라벨 + 담당자 멘션 실패 코멘트(오류 로그 요약). detect JQL 양쪽에 `claude-failed` 제외 추가. server.js 에 `failedLabel`/`maxRetries` 주입.
 
-- [ ] **3. clone 디렉토리 클린업**
+- [x] **3. clone 디렉토리 클린업**
   - 내용: 카드별 dir 재사용 시 이전 잔여 변경/브랜치로 checkout이 꼬이는 문제 방지.
   - AC: build 시작 시 `git reset --hard` + `git clean -fd` 후 base 브랜치로 정렬.
   - 영향: `run-jira-claude.sh`
+  → (완료 2026-06-23) `fetch --prune` → `reset --hard` + `clean -fd` → base checkout → `reset --hard origin/<base>` 로 결정적 정렬(`git pull` 대체). plan/build 공통 적용.
 
 - [ ] **4. env 유출 방지 강화**
   - 내용: `work.env`가 대상 repo로 커밋되는 사고를 구조적으로 차단.

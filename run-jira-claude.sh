@@ -87,12 +87,16 @@ else
   echo ">> [${ISSUE_KEY}] 이미 clone 됨: ${REPO_DIR}"
 fi
 
-# ===== 2) develop 브랜치로 이동 + 최신화 =====
+# ===== 2) clone 디렉토리 클린업 + base 브랜치 정렬 =====
+# 카드별 dir 재사용 시 이전 작업의 잔여 변경/추적되지 않은 파일/꼬인 브랜치 상태가
+# checkout 을 막지 않도록, fetch 후 강제로 정리하고 base 를 origin 에 맞춘다.
 cd "${REPO_DIR}"
-echo ">> [${ISSUE_KEY}] fetch & checkout ${BASE_BRANCH}"
-git fetch origin
+echo ">> [${ISSUE_KEY}] fetch & 클린업 & checkout ${BASE_BRANCH}"
+git fetch origin --prune
+git reset --hard
+git clean -fd
 git checkout "${BASE_BRANCH}"
-git pull origin "${BASE_BRANCH}"
+git reset --hard "origin/${BASE_BRANCH}"
 
 # ===== 3) env 파일 복사 =====
 if [[ -f "${ENV_SRC}" ]]; then
