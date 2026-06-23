@@ -31,6 +31,8 @@ const DEFAULT_CONFIG = {
   triggerText: "claude-work",
   doneStatus: "DEV COMPLETED",
   plannedLabel: "claude-planned",
+  failedLabel: "claude-failed",                 // 반복 실패 카드 표시(탐지 제외)
+  maxRetries: 3,                                // 연속 실패 N회 초과 시 실패 처리
   intervalSeconds: 3600,
   envPath: path.join(SCRIPTS_DIR, "work.env"),  // 대상 repo로 복사할 env 파일
   cloneBase: path.join(SCRIPTS_DIR, "repos"),   // clone 베이스 폴더
@@ -74,6 +76,8 @@ function scriptEnv() {
   env.TRIGGER_TEXT = cfg.triggerText;
   env.DONE_STATUS = cfg.doneStatus;
   env.PLANNED_LABEL = cfg.plannedLabel;
+  env.FAILED_LABEL = cfg.failedLabel || "claude-failed";
+  env.MAX_RETRIES = String(cfg.maxRetries || 3);
   env.PROJECT_KEY = cfg.projectKey || "";
   env.ENV_SRC = cfg.envPath || path.join(cfg.workDir, "work.env");
   env.CLONE_BASE = cfg.cloneBase || path.join(cfg.workDir, "repos");

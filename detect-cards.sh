@@ -21,6 +21,7 @@ MODE="${1:-plan}"
 DONE_STATUS="${DONE_STATUS:-DEV COMPLETED}"
 TRIGGER_TEXT="${TRIGGER_TEXT:-claude-work}"
 PLANNED_LABEL="${PLANNED_LABEL:-claude-planned}"
+FAILED_LABEL="${FAILED_LABEL:-claude-failed}"   # 반복 실패 카드는 탐지에서 제외
 PROJECT_KEY="${PROJECT_KEY:-}"   # 설정 시 'AND project = X' 필터 추가
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -33,10 +34,11 @@ if [[ -n "${PROJECT_KEY}" ]]; then
   PROJECT_FILTER=" AND project = \"${PROJECT_KEY}\""
 fi
 
+FAILED_FILTER=" AND (labels != \"${FAILED_LABEL}\" OR labels IS EMPTY)"
 if [[ "${MODE}" == "plan" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${PROJECT_FILTER}"
+  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${FAILED_FILTER}${PROJECT_FILTER}"
 elif [[ "${MODE}" == "build" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND labels = \"${PLANNED_LABEL}\"${PROJECT_FILTER}"
+  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND text ~ \"${TRIGGER_TEXT}\" AND labels = \"${PLANNED_LABEL}\"${FAILED_FILTER}${PROJECT_FILTER}"
 else
   echo "Usage: $0 <plan|build>" >&2
   exit 1

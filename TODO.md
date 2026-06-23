@@ -20,10 +20,11 @@
   - 영향: `run-jira-claude.sh` (build 프롬프트/사전 점검)
   → (완료 2026-06-23) build 단계 claude 실행 전 `git ls-remote feature/<KEY>-*` + `gh pr list --search <KEY>` 점검, 존재 시 `SKIP: 이미 처리됨` 출력 후 종료.
 
-- [ ] **2. 실패 처리·재시도 정책**
+- [x] **2. 실패 처리·재시도 정책**
   - 내용: 실패한 카드가 매 주기 무한 재시도되지 않도록 처리.
   - AC: 실패 시 `claude-failed` 라벨 부여 + 실패 사유를 카드 코멘트로 기록 + N회 초과 시 탐지에서 제외(백오프).
   - 영향: `run-jira-claude.sh`, `detect-cards.sh`(JQL에 `claude-failed` 제외)
+  → (완료 2026-06-23) 카드별 실패 카운터(`repos/.state/<KEY>.fail`) + `MAX_RETRIES`(기본 3) 초과 시 claude 로 `claude-failed` 라벨 + 담당자 멘션 실패 코멘트(오류 로그 요약). detect JQL 양쪽에 `claude-failed` 제외 추가. server.js 에 `failedLabel`/`maxRetries` 주입.
 
 - [ ] **3. clone 디렉토리 클린업**
   - 내용: 카드별 dir 재사용 시 이전 잔여 변경/브랜치로 checkout이 꼬이는 문제 방지.
