@@ -1,6 +1,7 @@
 # 비밀 / 런타임 설정
 *.env
 *.env.bak
+.env-key
 dashboard/config.json
 dashboard/credentials.json
 dashboard/projects.json

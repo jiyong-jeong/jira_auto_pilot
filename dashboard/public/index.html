@@ -432,11 +432,11 @@ function ProjectCard({ proj, onDeleted, flash }) {
           </div>
         )}
         <label className="block mb-3">
-          <span className="text-sm text-slate-400">카드 전용 env (선택) — <code className="text-xs">claude.env</code> 로 카드에 첨부되어, build 시 각 repo 의 envDest 로 복사됩니다</span>
+          <span className="text-sm text-slate-400">카드 전용 env (선택) — AES 암호화하여 <code className="text-xs">claude.env</code> 로 첨부, build 시 로컬 키로 복호화해 각 repo 의 envDest 로 복사</span>
           <textarea value={newCard.env} onChange={(e) => setNewCard({ ...newCard, env: e.target.value })} spellCheck={false}
-            placeholder="KEY=VALUE … (이 카드 작업에만 쓰이는 env. 비우면 프로젝트/리포 공통 env 사용)"
+            placeholder="KEY=VALUE … (이 카드 작업에만 쓰이는 env. 비우면 repo 전용 env 사용)"
             className="mt-1 w-full h-24 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:border-indigo-400" />
-          {newCard.env.trim() && <span className="text-[11px] text-amber-300/80">⚠️ 시크릿이 Jira 첨부로 업로드되어 카드 접근자에게 노출됩니다. 민감정보 주의.</span>}
+          {newCard.env.trim() && <span className="text-[11px] text-emerald-300/80">🔒 AES-256-GCM 으로 암호화되어 첨부됩니다(호스트의 .env-key 로만 복호화).</span>}
         </label>
         <div className="flex items-center gap-5 mb-3 text-sm text-slate-300">
           <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.addTriggerLabel} onChange={(e) => setNewCard({ ...newCard, addTriggerLabel: e.target.checked })} /><span>{config.triggerLabel || "claude-work"} 라벨 추가</span></label>

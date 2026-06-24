@@ -156,6 +156,29 @@ test("cardRepos: repo_<name> 라벨 매칭, 없으면 첫 repo", () => {
   assert.deepEqual(lib.cardRepos({}, ["repo_x"]), []); // repo 없음
 });
 
+test("encryptEnv/decryptEnv: 왕복 + 평문 호환 + 변조 감지", () => {
+  const crypto = require("crypto");
+  const key = crypto.randomBytes(32);
+  const plain = "AWS_KEY=abc\nDB_PW=p@ss w0rd\n한글=값";
+  const enc = lib.encryptEnv(plain, key);
+  assert.ok(enc.startsWith("ENCv1:"));            // 암호문 마커
+  assert.ok(!enc.includes("AWS_KEY"));            // 원문 노출 없음
+  assert.equal(lib.decryptEnv(enc, key), plain);  // 왕복 복원
+  assert.equal(lib.decryptEnv("KEY=1\nX=2", key), "KEY=1\nX=2"); // 평문 첨부 호환
+  assert.throws(() => lib.decryptEnv(enc, crypto.randomBytes(32))); // 다른 키 → 실패(GCM 인증)
+});
+
+test("loadOrCreateEnvKey: 생성 후 동일 키 재사용", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "key-"));
+  try {
+    const p = path.join(dir, ".env-key");
+    const k1 = lib.loadOrCreateEnvKey(p);
+    assert.equal(k1.length, 32);
+    const k2 = lib.loadOrCreateEnvKey(p);            // 재호출 시 기존 키 로드
+    assert.deepEqual(k1, k2);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("createStore: 레거시 없으면 빈 목록", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "store-"));
   const s = lib.createStore({ projectsPath: path.join(dir, "p.json"), credsPath: path.join(dir, "c.json"), configPath: path.join(dir, "none.json"), credPath: path.join(dir, "none2.json"), defaultConfig: {} });

@@ -43,7 +43,7 @@ async function resolveCardEnv(cfg, cred, key) {
     const att = envAtts[envAtts.length - 1];
     const rr = await fetch(att.content, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(20000) });
     if (!rr.ok) return null;
-    const txt = await rr.text();
+    const txt = lib.decryptEnv(await rr.text(), lib.loadOrCreateEnvKey(path.join(SELF, ".env-key")));   // 암호문이면 복호화
     const base = cfg.cloneBase || path.join(cfg.workDir || SELF, "repos");
     const p = path.join(base, ".state", `${key}.env`);
     fs.mkdirSync(path.dirname(p), { recursive: true });

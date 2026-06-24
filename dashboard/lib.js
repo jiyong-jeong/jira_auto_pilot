@@ -2,6 +2,30 @@
 // lib.js — server.js 의 순수 로직 + 프로젝트 스토어(파일 경로 주입형). 단위 테스트 대상.
 // =============================================================================
 const fs = require("fs");
+const crypto = require("crypto");
+
+// 카드 env 암호화(AES-256-GCM) — 첨부엔 암호문만, 빌드 시 로컬 키로만 복호화
+const ENC_PREFIX = "ENCv1:";
+function loadOrCreateEnvKey(keyPath) {
+  try { const b = Buffer.from(fs.readFileSync(keyPath, "utf8").trim(), "base64"); if (b.length === 32) return b; } catch {}
+  const key = crypto.randomBytes(32);
+  fs.writeFileSync(keyPath, key.toString("base64"), { mode: 0o600 });
+  return key;
+}
+function encryptEnv(plain, key) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv("aes-256-gcm", key, iv);
+  const ct = Buffer.concat([c.update(String(plain), "utf8"), c.final()]);
+  return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), ct]).toString("base64");
+}
+function decryptEnv(data, key) {
+  const s = String(data);
+  if (!s.startsWith(ENC_PREFIX)) return s; // 평문 첨부 호환
+  const buf = Buffer.from(s.slice(ENC_PREFIX.length), "base64");
+  const d = crypto.createDecipheriv("aes-256-gcm", key, buf.subarray(0, 12));
+  d.setAuthTag(buf.subarray(12, 28));
+  return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString("utf8");
+}
 
 const DEFAULT_CREDS = { anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" };
 
@@ -156,4 +180,5 @@ module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
   adfToText, toADF, buildReplyADF, maskCreds, applyCreds, createStore,
   REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
+  loadOrCreateEnvKey, encryptEnv, decryptEnv,
 };

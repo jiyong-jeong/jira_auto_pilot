@@ -58,6 +58,8 @@ function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DI
 function repoEnvSrc(cfg, repoName) { return repoEnvFile(cfg, repoName); }
 // 카드 전용 env 첨부 파일명 + 다운로드 보관 위치(로컬, gitignore)
 const CARD_ENV_NAME = "claude.env";
+const ENV_KEY_PATH = path.join(SCRIPTS_DIR, ".env-key");   // AES 키(로컬 전용, gitignore)
+const envKey = () => lib.loadOrCreateEnvKey(ENV_KEY_PATH);
 function cardEnvLocal(cfg, key) { return path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state", `${key}.env`); }
 // run-jira-claude.sh 에 넘길 줄 형식: name<US>url<US>baseBranch<US>envSrc<US>envDest (US=\x1f, 빈 필드 보존)
 // envSrcOverride 가 있으면(=카드 전용 env) 모든 repo 의 envSrc 로 사용
@@ -277,7 +279,7 @@ async function resolveCardEnv(key, cfg, cred) {
     const att = envAtts[envAtts.length - 1]; // 여러 번 올렸으면 최신
     const r = await fetch(att.content, { headers: { Authorization: `Basic ${jiraAuth(cred)}` } });
     if (!r.ok) return null;
-    const txt = await r.text();
+    const txt = lib.decryptEnv(await r.text(), envKey());   // 암호문이면 복호화, 평문이면 그대로
     const p = cardEnvLocal(cfg, key);
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, txt, { mode: 0o600 });
@@ -554,10 +556,13 @@ app.post("/api/jira/issue", async (req, res) => {
       try { await jiraAttach(created.key, a.filename, a.dataBase64, a.contentType, cfg, cred); attached.push(a.filename || "file"); }
       catch (e) { attachErrors.push(`${a.filename || "file"}: ${e.message}`); }
     }
-    // 카드 전용 env: 텍스트를 claude.env 파일로 카드에 첨부(빌드 시 내려받아 clone 에 복사)
+    // 카드 전용 env: AES 암호화한 암호문을 claude.env 로 카드에 첨부(빌드 시 로컬 키로 복호화해 clone 에 복사)
     if (String(b.env || "").trim()) {
-      try { await jiraAttach(created.key, CARD_ENV_NAME, Buffer.from(b.env, "utf8").toString("base64"), "text/plain", cfg, cred); attached.push(CARD_ENV_NAME); }
-      catch (e) { attachErrors.push(`${CARD_ENV_NAME}: ${e.message}`); }
+      try {
+        const enc = lib.encryptEnv(b.env, envKey());
+        await jiraAttach(created.key, CARD_ENV_NAME, Buffer.from(enc, "utf8").toString("base64"), "text/plain", cfg, cred);
+        attached.push(CARD_ENV_NAME);
+      } catch (e) { attachErrors.push(`${CARD_ENV_NAME}: ${e.message}`); }
     }
     res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}`, attached, attachErrors, note: autoNote });
   } catch (e) { fail(res, e); }
