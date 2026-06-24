@@ -24,9 +24,10 @@ function normalizeRepos(p) {
       name: r.name || repoNameFromUrl(r.url),
       url: r.url,
       baseBranch: r.baseBranch || p.baseBranch || "main",
+      envDest: r.envDest || "",
     }));
   }
-  if (p.repoUrl) return [{ name: repoNameFromUrl(p.repoUrl), url: p.repoUrl, baseBranch: p.baseBranch || "main" }];
+  if (p.repoUrl) return [{ name: repoNameFromUrl(p.repoUrl), url: p.repoUrl, baseBranch: p.baseBranch || "main", envDest: p.envDest || "" }];
   return [];
 }
 // 카드 라벨로 대상 repo 결정: repo_<name> 라벨과 매칭. 없으면 첫 repo(기본).

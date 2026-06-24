@@ -137,15 +137,15 @@ test("createStore: 마이그레이션 + CRUD + 자격증명", () => {
   }
 });
 
-test("normalizeRepos: repos 배열 우선, 레거시 repoUrl 변환", () => {
-  assert.deepEqual(lib.normalizeRepos({ repos: [{ name: "be", url: "https://x/be.git", baseBranch: "dev" }] }),
-    [{ name: "be", url: "https://x/be.git", baseBranch: "dev" }]);
-  // name 미지정 → url 에서 도출, baseBranch 기본값
+test("normalizeRepos: repos 배열 우선, 레거시 repoUrl 변환, envDest 보존", () => {
+  assert.deepEqual(lib.normalizeRepos({ repos: [{ name: "be", url: "https://x/be.git", baseBranch: "dev", envDest: ".env" }] }),
+    [{ name: "be", url: "https://x/be.git", baseBranch: "dev", envDest: ".env" }]);
+  // name 미지정 → url 에서 도출, baseBranch 기본값, envDest 기본 ""
   assert.deepEqual(lib.normalizeRepos({ repos: [{ url: "https://github.com/o/firescout-backend.git" }], baseBranch: "main" }),
-    [{ name: "firescout-backend", url: "https://github.com/o/firescout-backend.git", baseBranch: "main" }]);
-  // 레거시 repoUrl
-  assert.deepEqual(lib.normalizeRepos({ repoUrl: "https://github.com/o/kyb-api.git", baseBranch: "main" }),
-    [{ name: "kyb-api", url: "https://github.com/o/kyb-api.git", baseBranch: "main" }]);
+    [{ name: "firescout-backend", url: "https://github.com/o/firescout-backend.git", baseBranch: "main", envDest: "" }]);
+  // 레거시 repoUrl → 프로젝트 envDest 승계
+  assert.deepEqual(lib.normalizeRepos({ repoUrl: "https://github.com/o/kyb-api.git", baseBranch: "main", envDest: "work.env" }),
+    [{ name: "kyb-api", url: "https://github.com/o/kyb-api.git", baseBranch: "main", envDest: "work.env" }]);
   assert.deepEqual(lib.normalizeRepos({}), []);
 });
 
