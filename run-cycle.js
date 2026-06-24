@@ -27,9 +27,32 @@ function repoEnvSrc(cfg, repoName) {
   if (fs.existsSync(p)) return p;
   return cfg.envPath || path.join(cfg.workDir || SELF, `work-${cfg.id}.env`);
 }
-const reposToLines = (cfg, repos) => (repos || []).map((r) =>
-  [r.name, r.url, r.baseBranch || "main", repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
+const reposToLines = (cfg, repos, envSrcOverride) => (repos || []).map((r) =>
+  [r.name, r.url, r.baseBranch || "main", envSrcOverride || repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
 ).join("\n");
+
+// 카드의 claude.env 첨부를 내려받아 로컬(.state/<KEY>.env)에 저장하고 경로 반환(없으면 null)
+const CARD_ENV_NAME = "claude.env";
+async function resolveCardEnv(cfg, cred, key) {
+  if (!cred || !cred.atlassianEmail || !cred.atlassianToken || !cfg.jiraSite) return null;
+  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
+  try {
+    const r = await fetch(`https://${cfg.jiraSite}/rest/api/3/issue/${encodeURIComponent(key)}?fields=attachment`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const envAtts = ((d.fields && d.fields.attachment) || []).filter((a) => a.filename === CARD_ENV_NAME);
+    if (!envAtts.length) return null;
+    const att = envAtts[envAtts.length - 1];
+    const rr = await fetch(att.content, { headers: { Authorization: `Basic ${auth}` }, signal: AbortSignal.timeout(20000) });
+    if (!rr.ok) return null;
+    const txt = await rr.text();
+    const base = cfg.cloneBase || path.join(cfg.workDir || SELF, "repos");
+    const p = path.join(base, ".state", `${key}.env`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, txt, { mode: 0o600 });
+    return p;
+  } catch { return null; }
+}
 
 // 카드 라벨 조회(프로젝트 자격증명) → 대상 repo 결정용
 async function fetchLabels(cfg, cred, key) {
@@ -101,7 +124,10 @@ async function detect(p, env) {
 
 async function runCard(key, env, cfg, cred) {
   const e = { ...env };
-  try { e.CARD_REPOS = reposToLines(cfg, lib.cardRepos(cfg, await fetchLabels(cfg, cred, key))); } catch { /* 기본(전체) 사용 */ }
+  try {
+    const cardEnv = await resolveCardEnv(cfg, cred, key);   // 카드 전용 env 첨부 우선
+    e.CARD_REPOS = reposToLines(cfg, lib.cardRepos(cfg, await fetchLabels(cfg, cred, key)), cardEnv);
+  } catch { /* 기본(전체) 사용 */ }
   return new Promise((resolve) => {
     const c = spawn("bash", [path.join(SELF, "run-jira-claude.sh"), key, phase], { env: e, stdio: "inherit" });
     c.on("close", () => resolve());

@@ -56,9 +56,13 @@ const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, mask
 // repo 별 env 파일 경로(없으면 프로젝트 공통 env 로 폴백) — 분리 저장
 function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
 function repoEnvSrc(cfg, repoName) { const p = repoEnvFile(cfg, repoName); return fs.existsSync(p) ? p : projectEnvPath(cfg); }
+// 카드 전용 env 첨부 파일명 + 다운로드 보관 위치(로컬, gitignore)
+const CARD_ENV_NAME = "claude.env";
+function cardEnvLocal(cfg, key) { return path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state", `${key}.env`); }
 // run-jira-claude.sh 에 넘길 줄 형식: name<US>url<US>baseBranch<US>envSrc<US>envDest (US=\x1f, 빈 필드 보존)
-const reposToLines = (cfg, repos) => (repos || []).map((r) =>
-  [r.name, r.url, r.baseBranch || "main", repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
+// envSrcOverride 가 있으면(=카드 전용 env) 모든 repo 의 envSrc 로 사용
+const reposToLines = (cfg, repos, envSrcOverride) => (repos || []).map((r) =>
+  [r.name, r.url, r.baseBranch || "main", envSrcOverride || repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
 ).join("\n");
 const store = lib.createStore({
   projectsPath: PROJECTS_PATH, credsPath: PROJECT_CREDS_PATH,
@@ -264,6 +268,22 @@ async function transitionToDone(key, cfg, cred) {
   await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { transition: { id: tr.id } }, cfg, cred);
   return tr.to.name;
 }
+// 카드의 claude.env 첨부를 내려받아 로컬(.state/<KEY>.env)에 저장하고 경로 반환(없으면 null)
+async function resolveCardEnv(key, cfg, cred) {
+  try {
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=attachment`, null, cfg, cred);
+    const envAtts = ((issue.fields && issue.fields.attachment) || []).filter((a) => a.filename === CARD_ENV_NAME);
+    if (!envAtts.length) return null;
+    const att = envAtts[envAtts.length - 1]; // 여러 번 올렸으면 최신
+    const r = await fetch(att.content, { headers: { Authorization: `Basic ${jiraAuth(cred)}` } });
+    if (!r.ok) return null;
+    const txt = await r.text();
+    const p = cardEnvLocal(cfg, key);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, txt, { mode: 0o600 });
+    return p;
+  } catch { return null; }
+}
 async function jiraAttach(issueKey, filename, dataBase64, contentType, cfg, cred) {
   const auth = jiraAuth(cred);
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ""), "base64");
@@ -363,7 +383,8 @@ app.post("/api/cards/:key/run", async (req, res) => {
     let reposLines;
     try {
       const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
-      reposLines = reposToLines(cfg, cardRepos(cfg, (issue.fields && issue.fields.labels) || []));
+      const cardEnv = await resolveCardEnv(key, cfg, cred);   // 카드 전용 env 첨부 → 있으면 우선
+      reposLines = reposToLines(cfg, cardRepos(cfg, (issue.fields && issue.fields.labels) || []), cardEnv);
     } catch { reposLines = null; } // 라벨 조회 실패 시 scriptEnv 기본(전체 repo) 사용
     res.json(runCard(key, phase, new Date().toISOString(), id, reposLines, rework));
   } catch (e) { fail(res, e); }
@@ -532,6 +553,11 @@ app.post("/api/jira/issue", async (req, res) => {
     for (const a of atts) {
       try { await jiraAttach(created.key, a.filename, a.dataBase64, a.contentType, cfg, cred); attached.push(a.filename || "file"); }
       catch (e) { attachErrors.push(`${a.filename || "file"}: ${e.message}`); }
+    }
+    // 카드 전용 env: 텍스트를 claude.env 파일로 카드에 첨부(빌드 시 내려받아 clone 에 복사)
+    if (String(b.env || "").trim()) {
+      try { await jiraAttach(created.key, CARD_ENV_NAME, Buffer.from(b.env, "utf8").toString("base64"), "text/plain", cfg, cred); attached.push(CARD_ENV_NAME); }
+      catch (e) { attachErrors.push(`${CARD_ENV_NAME}: ${e.message}`); }
     }
     res.json({ ok: true, key: created.key, url: `https://${cfg.jiraSite}/browse/${created.key}`, attached, attachErrors, note: autoNote });
   } catch (e) { fail(res, e); }
