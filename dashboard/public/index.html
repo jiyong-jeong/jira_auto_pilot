@@ -84,11 +84,11 @@ function Btn({ children, onClick, color = "indigo", disabled }) {
 }
 
 const stageBadge = {
-  "plan-ready": ["질문 대기(plan)", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
-  "awaiting-answer": ["답변 대기(claude-answered)", "bg-violet-500/20 text-violet-300 border-violet-500/40"],
-  "build-ready": ["개발 대기(build)", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
-  "failed": ["실패(claude-failed)", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
-  "done": ["완료(DEV COMPLETED)", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
+  "plan-ready": ["질문 대기", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
+  "awaiting-answer": ["답변 대기", "bg-violet-500/20 text-violet-300 border-violet-500/40"],
+  "build-ready": ["개발 대기", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
+  "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
+  "done": ["완료", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
 };
 const resultBadge = {
   "success": ["성공", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
@@ -352,7 +352,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
                     <tr className="border-b border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => toggleCard(c.key)}>
                       <td className="py-2"><span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span><a href={c.url} target="_blank" onClick={(e) => e.stopPropagation()} className="text-indigo-400 hover:underline">{c.key}</a></td>
                       <td className="pr-3 break-words">{c.summary}</td><td className="text-slate-300 break-words">{c.status}</td>
-                      <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                      <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
                     </tr>
                     {open && (
                       <tr className="border-b border-slate-800 bg-slate-900/50"><td colSpan={4} className="p-4">
@@ -480,7 +480,7 @@ function App() {
                     <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
                     <td className="text-slate-400">{h.project || "-"}</td>
                     <td className="text-slate-200">{h.key}</td><td className="text-slate-300">{h.phase}</td>
-                    <td><span className={`text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                    <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
                     <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
                     <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
                   </tr>
