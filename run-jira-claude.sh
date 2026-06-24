@@ -47,14 +47,8 @@ TEST_CMD="${TEST_CMD:-}"                        # 테스트 명령(비우면 cla
 BUILD_CMD="${BUILD_CMD:-}"                      # 빌드 명령(비우면 claude 가 자동 감지)
 HISTORY_FILE="${HISTORY_FILE:-${WORK_DIR}/history.jsonl}"  # 처리 이력(JSONL) 기록 파일
 
-if [[ -z "${REPO_URL}" ]]; then
-  echo "ERROR: REPO_URL 이 설정되지 않았습니다. 환경변수로 대상 repo URL 을 지정하세요." >&2
-  exit 1
-fi
-
-# repo 디렉토리/이름은 REPO_URL 기준으로 자동 도출 (어떤 repo든 지원)
-REPO_NAME="$(basename "${REPO_URL%.git}")"
 ENV_NAME="$(basename "${ENV_SRC}")"
+CARD_REPOS="${CARD_REPOS:-}"   # 대상 repo 목록: 'name<TAB>url<TAB>baseBranch' 줄 단위. 비우면 REPO_URL 단일.
 
 # ===== 인자 파싱 =====
 ISSUE_KEY="${1:-}"
@@ -105,17 +99,6 @@ record_history() {
     "${ts}" "${PROJECT_ID:-}" "${ISSUE_KEY}" "${PHASE}" "${result}" "${pr}" "${branch}" >> "${HISTORY_FILE}"
 }
 
-# ===== 카드별 디렉토리 (병렬 실행용) =====
-REPO_DIR="${CLONE_BASE}/${REPO_NAME}-${ISSUE_KEY}"
-# env 복사 대상: ENV_DEST_REL 이 있으면 repo 내 해당 상대경로, 없으면 루트에 원본 파일명
-if [[ -n "${ENV_DEST_REL}" ]]; then
-  ENV_DEST="${REPO_DIR}/${ENV_DEST_REL}"
-  ENV_EXCLUDE="${ENV_DEST_REL}"
-else
-  ENV_DEST="${REPO_DIR}/${ENV_NAME}"
-  ENV_EXCLUDE="${ENV_NAME}"
-fi
-
 # ===== 필수 도구 확인 =====
 for cmd in git claude; do
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -139,46 +122,50 @@ fi
 printf '%s' "${PHASE}" > "${LOCK_DIR}.phase" 2>/dev/null || true
 trap 'rmdir "${LOCK_DIR}" 2>/dev/null || true; rm -f "${LOCK_DIR}.phase" 2>/dev/null || true' EXIT
 
-# ===== 1) clone (없으면) =====
+# ===== 대상 repo 목록 파싱 (CARD_REPOS 우선, 없으면 REPO_URL 단일) =====
+declare -a R_NAME R_URL R_BRANCH
+if [[ -n "${CARD_REPOS}" ]]; then
+  while IFS=$'\t' read -r _n _u _b; do
+    [[ -z "${_u:-}" ]] && continue
+    R_NAME+=("${_n:-$(basename "${_u%.git}")}"); R_URL+=("${_u}"); R_BRANCH+=("${_b:-main}")
+  done <<< "${CARD_REPOS}"
+fi
+if [[ ${#R_URL[@]} -eq 0 ]]; then
+  if [[ -z "${REPO_URL}" ]]; then echo "ERROR: 대상 repo 가 없습니다(CARD_REPOS/REPO_URL 미설정)." >&2; exit 1; fi
+  R_NAME+=("$(basename "${REPO_URL%.git}")"); R_URL+=("${REPO_URL}"); R_BRANCH+=("${BASE_BRANCH}")
+fi
+echo ">> [${ISSUE_KEY}] 대상 repo ${#R_URL[@]}개: ${R_NAME[*]}"
+
+# ===== clone + 클린업 + env 복사 (repo 별) =====
 mkdir -p "${CLONE_BASE}"
-if [[ ! -d "${REPO_DIR}/.git" ]]; then
-  echo ">> [${ISSUE_KEY}] Cloning ${REPO_URL} -> ${REPO_DIR}"
-  git clone "${REPO_URL}" "${REPO_DIR}"
-else
-  echo ">> [${ISSUE_KEY}] 이미 clone 됨: ${REPO_DIR}"
-fi
-
-# ===== 2) clone 디렉토리 클린업 + base 브랜치 정렬 =====
-# 카드별 dir 재사용 시 이전 작업의 잔여 변경/추적되지 않은 파일/꼬인 브랜치 상태가
-# checkout 을 막지 않도록, fetch 후 강제로 정리하고 base 를 origin 에 맞춘다.
-cd "${REPO_DIR}"
-echo ">> [${ISSUE_KEY}] fetch & 클린업 & checkout ${BASE_BRANCH}"
-git fetch origin --prune
-git reset --hard
-git clean -fd
-git checkout "${BASE_BRANCH}"
-git reset --hard "origin/${BASE_BRANCH}"
-
-# ===== 3) env 파일 복사 =====
-if [[ -f "${ENV_SRC}" ]]; then
-  mkdir -p "$(dirname "${ENV_DEST}")"   # 대상 경로(예: src/main/resources)의 상위 디렉토리 보장
-  cp "${ENV_SRC}" "${ENV_DEST}"
-  echo ">> [${ISSUE_KEY}] env 복사: ${ENV_SRC} -> ${ENV_DEST}"
-  # env 유출 방지: clone 의 .git/info/exclude 에 대상 경로를 등록해 추적/커밋을 구조적으로 차단
-  # (.gitignore 수정과 달리 repo 에 커밋되지 않는 로컬 전용 ignore). 프롬프트 의존 제거.
-  EXCLUDE_FILE="${REPO_DIR}/.git/info/exclude"
-  for pat in "${ENV_EXCLUDE}" ".env"; do
-    if [[ ! -f "${EXCLUDE_FILE}" ]] || ! grep -qxF "${pat}" "${EXCLUDE_FILE}"; then
-      echo "${pat}" >> "${EXCLUDE_FILE}"
-    fi
-  done
-  echo ">> [${ISSUE_KEY}] .git/info/exclude 에 env 패턴 등록(${ENV_EXCLUDE}, .env)"
-else
-  echo ">> [${ISSUE_KEY}] WARN: env 파일 없음: ${ENV_SRC} (건너뜀)"
-fi
-
-# ===== 4) clone 디렉토리로 이동 (이미 cd 됨) =====
-echo ">> [${ISSUE_KEY}] 작업 디렉토리: $(pwd)"
+REPO_LIST_TEXT=""
+for idx in "${!R_URL[@]}"; do
+  rn="${R_NAME[$idx]}"; ru="${R_URL[$idx]}"; rb="${R_BRANCH[$idx]}"
+  rd="${CLONE_BASE}/${rn}-${ISSUE_KEY}"
+  if [[ ! -d "${rd}/.git" ]]; then
+    echo ">> [${ISSUE_KEY}] clone ${ru} -> ${rd}"
+    git clone "${ru}" "${rd}"
+  fi
+  echo ">> [${ISSUE_KEY}] (${rn}) fetch & 클린업 & checkout ${rb}"
+  git -C "${rd}" fetch origin --prune
+  git -C "${rd}" reset --hard
+  git -C "${rd}" clean -fd
+  git -C "${rd}" checkout "${rb}"
+  git -C "${rd}" reset --hard "origin/${rb}"
+  # env 복사(+ .git/info/exclude 로 커밋 차단)
+  if [[ -f "${ENV_SRC}" ]]; then
+    if [[ -n "${ENV_DEST_REL}" ]]; then ed="${rd}/${ENV_DEST_REL}"; ee="${ENV_DEST_REL}"; else ed="${rd}/${ENV_NAME}"; ee="${ENV_NAME}"; fi
+    mkdir -p "$(dirname "${ed}")"; cp "${ENV_SRC}" "${ed}"
+    exf="${rd}/.git/info/exclude"
+    for pat in "${ee}" ".env"; do
+      if [[ ! -f "${exf}" ]] || ! grep -qxF "${pat}" "${exf}"; then echo "${pat}" >> "${exf}"; fi
+    done
+    echo ">> [${ISSUE_KEY}] (${rn}) env 복사: -> ${ed}"
+  fi
+  REPO_LIST_TEXT="${REPO_LIST_TEXT}- ${rn} (base 브랜치 ${rb}): ${rd}"$'\n'
+done
+cd "${CLONE_BASE}"
+echo ">> [${ISSUE_KEY}] 작업 베이스: $(pwd)"
 
 # ===== 5) claude 실행 (+ 실패 재시도/백오프) =====
 if [[ "${PHASE}" == "plan" ]]; then
@@ -192,7 +179,8 @@ if [[ "${PHASE}" == "plan" ]]; then
    위 조건 중 하나라도 충족하지 않으면, 아무 작업도 하지 말고 이유를 출력하고 종료하세요.
 
 조건 충족 시:
-- 현재 코드베이스(${REPO_NAME}, ${BASE_BRANCH} 브랜치)를 살펴보고, 이슈가 요구하는 구현 내용을 검토하세요.
+- 다음 대상 repo 들의 코드베이스를 살펴보고, 이슈가 요구하는 구현 내용을 검토하세요(여러 repo 일 수 있음):
+${REPO_LIST_TEXT}
 - 아직 코드를 작성하지 마세요.
 - 구현 전에 명확히 해야 할 질문들을 정리해, Jira 이슈 ${ISSUE_KEY} 에 코멘트로 작성하세요.
   코멘트는 담당자(${ASSIGNEE_NAME})를 멘션하고, 답변하기 쉽게 번호를 매겨 질문하세요.
@@ -201,28 +189,13 @@ if [[ "${PHASE}" == "plan" ]]; then
 - 코멘트 작성에 성공한 뒤, 이 이슈에 '${PLANNED_LABEL}' 라벨을 추가하세요.
   (이 라벨은 build 루프가 이 카드를 인식하고, plan 루프가 중복 처리하지 않도록 하는 표시입니다.)"
 else
-  # ===== 멱등성 가드: 이미 이 이슈로 만든 PR/원격 브랜치가 있으면 스킵 =====
-  # build 중간 실패 후 재시도 시 중복 브랜치/PR 생성을 방지한다.
-  EXISTING_BRANCH="$(git ls-remote --heads origin "feature/${ISSUE_KEY}-*" "feature/${ISSUE_KEY}" 2>/dev/null \
-    | awk '{print $2}' | sed 's#refs/heads/##' | head -n1 || true)"
-  EXISTING_PR=""
-  if command -v gh >/dev/null 2>&1; then
-    EXISTING_PR="$(gh pr list --state open --search "${ISSUE_KEY}" \
-      --json url,headRefName --jq '.[0].url' 2>/dev/null || true)"
-  fi
-  if [[ -n "${EXISTING_BRANCH}" || -n "${EXISTING_PR}" ]]; then
-    echo "SKIP: 이미 처리됨 — 이슈 ${ISSUE_KEY} 의 브랜치(${EXISTING_BRANCH:-없음}) / PR(${EXISTING_PR:-없음}) 존재. 중복 생성 방지를 위해 종료."
-    echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, skipped=idempotent)"
-    record_history "skip-idempotent" "${EXISTING_PR}" "${EXISTING_BRANCH}"
-    exit 0
-  fi
-
-  echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR"
-  PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 를 ${REPO_NAME} 코드베이스에서 구현합니다. 작업 디렉토리는 현재 디렉토리입니다.
+  echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR (대상 repo ${#R_URL[@]}개)"
+  PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 를 아래 대상 repo 들에서 구현합니다(여러 repo 일 수 있음). 각 repo 는 표시된 경로에 clone 되어 있습니다:
+${REPO_LIST_TEXT}
 
 [매우 중요] 이 작업은 헤드리스 1회 실행입니다. 작업을 '백그라운드로 미루거나' '나중에 알림을 받겠다'는 식으로 끝내지 마세요.
 테스트/빌드/커밋/푸시/PR/상태전환을 모두 '이 턴 안에서 동기적으로' 끝까지 수행한 뒤 종료하세요(오래 걸려도 끝까지 대기).
-PR 을 실제로 생성하지 못했다면 절대 완료로 간주하지 말고, 사유를 출력하고 비정상 종료하세요(다음 주기에 재시도됩니다).
+PR 을 하나도 생성하지 못했다면 절대 완료로 간주하지 말고, 사유를 출력하고 비정상 종료하세요(다음 주기에 재시도됩니다).
 
 1. Jira 이슈 ${ISSUE_KEY} 의 설명과 '모든 코멘트'(특히 담당자 ${ASSIGNEE_NAME} 의 답변), 그리고 라벨을 읽으세요.
 2. build 진입 조건은 다음 '둘 다' 충족입니다. 둘 중 하나라도 없으면 어떤 코드 변경/커밋/PR도 하지 말고
@@ -237,18 +210,18 @@ PR 을 실제로 생성하지 못했다면 절대 완료로 간주하지 말고,
    - 테스트가 '존재하지 않으면' 테스트는 건너뛰고, 빌드/컴파일(${BUILD_DESC})만 시도하세요.
      빌드 수단이 있으면 실행해 통과시키고(실패 시 고쳐서 통과), 빌드 수단 자체가 없으면 이 단계를 건너뜁니다.
    - 검증을 통과(또는 정당하게 건너뜀)한 경우에만 다음 단계로 진행하세요.
-5. 구현·검증 후:
-   - Jira 이슈 키를 반영한 새 git 브랜치를 만드세요 (예: feature/${ISSUE_KEY}-<짧은-설명>).
-   - 명확한 메시지로 커밋하세요. 커밋 메시지 '본문 하단'에 '${ISSUE_KEY}' 를 명시하세요.
-   - 'origin' 으로 브랜치를 push 하세요.
-   - gh CLI 로 '${BASE_BRANCH}' 브랜치를 target 으로 하는 Pull Request 를 생성하고 PR URL 을 출력하세요.
-   - (보안) env 파일(${ENV_DEST} 또는 .env)은 절대 커밋/푸시하지 마세요. 커밋 전 git status 로 확인하고,
-     포함될 위험이 있으면 .gitignore 에 추가하세요.
-6. PR 생성까지 성공하면 마무리로:
+5. 구현·검증 후 — 위 '각 repo' 에 대해(변경이 필요 없는 repo 는 건너뜀):
+   - 해당 repo 디렉토리로 이동(cd)해서 작업하세요.
+   - PR 생성 전 'gh pr list' 로 이 이슈의 PR/브랜치가 이미 있는지 확인하고, 있으면 그 repo 는 중복 생성하지 말고 건너뛰세요.
+   - feature/${ISSUE_KEY}-<짧은-설명> 브랜치 생성 → 명확한 메시지로 커밋(메시지 하단에 '${ISSUE_KEY}' 명시) → 'origin' push.
+   - gh CLI 로 그 repo 의 base 브랜치를 target 으로 PR 을 생성하고 PR URL 을 출력하세요.
+   - (보안) env 파일(.env 또는 복사된 env 파일)은 절대 커밋/푸시하지 마세요. 커밋 전 git status 로 확인하세요.
+6. 최소 한 개 repo 에서 PR 을 생성한 뒤 마무리로:
    a) ${SUMMARY_INSTR}
+      (변경한 모든 repo 의 PR URL·브랜치를 repo 별로 나열하세요.)
    b) 이슈 상태를 '${DONE_STATUS}' 로 전환하세요. 가능한 transition 을 먼저 조회한 뒤 전환하고,
       전환이 불가능하면 사유를 출력하세요.
-완료 후 결과(테스트/빌드 결과 · 브랜치 · PR URL · 상태) 요약을 출력하세요."
+완료 후 결과(repo별 테스트/빌드 결과 · 브랜치 · PR URL · 상태) 요약을 출력하세요."
 fi
 
 # ===== 실행 + 실패 재시도/백오프 처리 =====

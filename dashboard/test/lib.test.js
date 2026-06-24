@@ -136,6 +136,25 @@ test("createStore: 마이그레이션 + CRUD + 자격증명", () => {
   }
 });
 
+test("normalizeRepos: repos 배열 우선, 레거시 repoUrl 변환", () => {
+  assert.deepEqual(lib.normalizeRepos({ repos: [{ name: "be", url: "https://x/be.git", baseBranch: "dev" }] }),
+    [{ name: "be", url: "https://x/be.git", baseBranch: "dev" }]);
+  // name 미지정 → url 에서 도출, baseBranch 기본값
+  assert.deepEqual(lib.normalizeRepos({ repos: [{ url: "https://github.com/o/firescout-backend.git" }], baseBranch: "main" }),
+    [{ name: "firescout-backend", url: "https://github.com/o/firescout-backend.git", baseBranch: "main" }]);
+  // 레거시 repoUrl
+  assert.deepEqual(lib.normalizeRepos({ repoUrl: "https://github.com/o/kyb-api.git", baseBranch: "main" }),
+    [{ name: "kyb-api", url: "https://github.com/o/kyb-api.git", baseBranch: "main" }]);
+  assert.deepEqual(lib.normalizeRepos({}), []);
+});
+
+test("cardRepos: repo_<name> 라벨 매칭, 없으면 첫 repo", () => {
+  const p = { repos: [{ name: "be", url: "u1" }, { name: "fe", url: "u2" }, { name: "infra", url: "u3" }] };
+  assert.deepEqual(lib.cardRepos(p, ["repo_be", "repo_infra", "claude-work"]).map((r) => r.name), ["be", "infra"]);
+  assert.deepEqual(lib.cardRepos(p, ["claude-work"]).map((r) => r.name), ["be"]); // 라벨 없음 → 첫 repo
+  assert.deepEqual(lib.cardRepos({}, ["repo_x"]), []); // repo 없음
+});
+
 test("createStore: 레거시 없으면 빈 목록", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "store-"));
   const s = lib.createStore({ projectsPath: path.join(dir, "p.json"), credsPath: path.join(dir, "c.json"), configPath: path.join(dir, "none.json"), credPath: path.join(dir, "none2.json"), defaultConfig: {} });

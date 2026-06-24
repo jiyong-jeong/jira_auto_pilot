@@ -109,7 +109,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" });
   const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
   const [jiraMeta, setJiraMeta] = useState({ issueTypes: [], epics: [], loaded: false, err: "" });
-  const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [] });
+  const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [], repos: [] });
   const [creating, setCreating] = useState(false);
   const [refining, setRefining] = useState(false);
   const [cards, setCards] = useState([]);
@@ -163,12 +163,13 @@ function ProjectCard({ proj, onDeleted, flash }) {
       .then((arr) => setNewCard((p) => ({ ...p, attachments: [...p.attachments, ...arr] })));
   };
   const removeAttachment = (i) => setNewCard((p) => ({ ...p, attachments: p.attachments.filter((_, idx) => idx !== i) }));
+  const toggleRepo = (name, on) => setNewCard((p) => ({ ...p, repos: on ? [...p.repos, name] : p.repos.filter((x) => x !== name) }));
   const createCard = async () => {
     if (!newCard.summary.trim()) { flash("요약을 입력하세요"); return; }
     setCreating(true);
-    const r = await api.post("/api/jira/issue", { summary: newCard.summary, description: newCard.description, issueType: newCard.issueType, parentKey: newCard.parentInput.trim() || newCard.epicKey, addTriggerLabel: newCard.addTriggerLabel, assignSelf: newCard.assignSelf, attachments: newCard.attachments, project: PID });
+    const r = await api.post("/api/jira/issue", { summary: newCard.summary, description: newCard.description, issueType: newCard.issueType, parentKey: newCard.parentInput.trim() || newCard.epicKey, addTriggerLabel: newCard.addTriggerLabel, assignSelf: newCard.assignSelf, attachments: newCard.attachments, repos: newCard.repos, project: PID });
     setCreating(false);
-    if (r.ok) { let m = `카드 생성됨: ${r.key}`; if (r.note) m += ` · ${r.note}`; if (r.attached?.length) m += ` · 첨부 ${r.attached.length}`; if (r.attachErrors?.length) m += ` · 첨부실패 ${r.attachErrors.length}`; flash(m); setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "", attachments: [] })); loadCards(); }
+    if (r.ok) { let m = `카드 생성됨: ${r.key}`; if (r.note) m += ` · ${r.note}`; if (r.attached?.length) m += ` · 첨부 ${r.attached.length}`; if (r.attachErrors?.length) m += ` · 첨부실패 ${r.attachErrors.length}`; flash(m); setNewCard((p) => ({ ...p, summary: "", description: "", parentInput: "", attachments: [], repos: [] })); loadCards(); }
     else flash(r.message || "생성 실패");
   };
   const loadCards = async () => { const r = await api.get(withP("/api/cards")); if (r.ok) { setCards(r.issues); setCardsErr(""); } else setCardsErr(r.message || "조회 실패"); };
@@ -196,8 +197,6 @@ function ProjectCard({ proj, onDeleted, flash }) {
       {/* 설정 */}
       <div className="grid grid-cols-2 gap-x-5">
         <Field label="프로젝트 이름" value={config.name} onChange={(v) => setConfig({ ...config, name: v })} placeholder="표시 이름" />
-        <Field label="GitHub Repository URL" value={config.repoUrl} onChange={(v) => setConfig({ ...config, repoUrl: v })} placeholder="https://github.com/Org/repo.git" />
-        <Field label="Base 브랜치" value={config.baseBranch} onChange={(v) => setConfig({ ...config, baseBranch: v })} />
         <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net" />
         <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
         <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
@@ -221,6 +220,27 @@ function ProjectCard({ proj, onDeleted, flash }) {
         <Field label="빌드 명령 (비우면 자동 감지)" value={config.buildCmd} onChange={(v) => setConfig({ ...config, buildCmd: v })} placeholder="예: npm run build" />
       </div>
       <p className="text-xs text-slate-500 mt-1">PR 전 검증: 테스트가 있으면 통과까지 수정, 없으면 빌드만 시도. 설정 변경 후 "설정 저장".</p>
+
+      {/* Git Repositories (여러 개) */}
+      <div className="mt-4 pt-4 border-t border-slate-700">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-slate-300">Git Repositories ({(config.repos || []).length})</span>
+          <Btn color="slate" onClick={() => setConfig({ ...config, repos: [...(config.repos || []), { name: "", url: "", baseBranch: "main" }] })}>+ repo 추가</Btn>
+        </div>
+        {(config.repos || []).length === 0 && <p className="text-amber-300/80 text-sm mb-2">repo 를 1개 이상 추가하세요. 카드 생성 시 대상 repo 로 선택됩니다.</p>}
+        {(config.repos || []).map((r, i) => {
+          const upd = (k, v) => setConfig({ ...config, repos: config.repos.map((x, idx) => idx === i ? { ...x, [k]: v } : x) });
+          return (
+            <div key={i} className="grid grid-cols-12 gap-2 mb-2 items-center">
+              <input value={r.name || ""} onChange={(e) => upd("name", e.target.value)} placeholder="name(라벨용)" className="col-span-3 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+              <input value={r.url || ""} onChange={(e) => upd("url", e.target.value)} placeholder="https://github.com/Org/repo.git" className="col-span-6 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+              <input value={r.baseBranch || ""} onChange={(e) => upd("baseBranch", e.target.value)} placeholder="main" className="col-span-2 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+              <button onClick={() => setConfig({ ...config, repos: config.repos.filter((_, idx) => idx !== i) })} className="col-span-1 text-slate-400 hover:text-rose-300">✕</button>
+            </div>
+          );
+        })}
+        <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. 카드 생성 시 여러 repo 를 선택해 대상으로 지정합니다.</p>
+      </div>
 
       {/* 자격증명 (프로젝트별) */}
       <div className="mt-4 pt-4 border-t border-slate-700">
@@ -325,6 +345,18 @@ function ProjectCard({ proj, onDeleted, flash }) {
             </div>
           )}
         </div>
+        {(config.repos || []).length > 0 && (
+          <div className="mb-3">
+            <span className="text-sm text-slate-400">대상 repo (여러 개 선택 가능 — 미선택 시 첫 repo)</span>
+            <div className="flex flex-wrap gap-3 mt-1">
+              {config.repos.map((r) => (
+                <label key={r.name} className="flex items-center gap-1.5 text-sm text-slate-300 cursor-pointer">
+                  <input type="checkbox" checked={newCard.repos.includes(r.name)} onChange={(e) => toggleRepo(r.name, e.target.checked)} /> {r.name || "(이름없음)"}
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="flex items-center gap-5 mb-3 text-sm text-slate-300">
           <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.addTriggerLabel} onChange={(e) => setNewCard({ ...newCard, addTriggerLabel: e.target.checked })} /><span>{config.triggerLabel || "claude-work"} 라벨 추가</span></label>
           <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.assignSelf} onChange={(e) => setNewCard({ ...newCard, assignSelf: e.target.checked })} /><span>나에게 할당</span></label>

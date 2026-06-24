@@ -14,12 +14,24 @@ const { spawn } = require("child_process");
 
 const SELF = __dirname;
 const DASH = path.join(SELF, "dashboard");
+const lib = require(path.join(DASH, "lib"));
 const phase = process.argv[2];
 if (!["plan", "build"].includes(phase)) { console.error("usage: run-cycle.js <plan|build>"); process.exit(2); }
 
 const ts = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const log = (m) => console.log(`[${ts()}] ${m}`);
 const readJson = (p, f) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return f; } };
+const reposToLines = (repos) => (repos || []).map((r) => `${r.name}\t${r.url}\t${r.baseBranch || "main"}`).join("\n");
+
+// 카드 라벨 조회(프로젝트 자격증명) → 대상 repo 결정용
+async function fetchLabels(cfg, cred, key) {
+  if (!cred || !cred.atlassianEmail || !cred.atlassianToken || !cfg.jiraSite) return [];
+  const auth = Buffer.from(`${cred.atlassianEmail}:${cred.atlassianToken}`).toString("base64");
+  const r = await fetch(`https://${cfg.jiraSite}/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, { headers: { Authorization: `Basic ${auth}`, Accept: "application/json" }, signal: AbortSignal.timeout(15000) });
+  if (!r.ok) return [];
+  const d = await r.json();
+  return (d.fields && d.fields.labels) || [];
+}
 
 const DEFAULTS = {
   workDir: SELF, baseBranch: "main", triggerMode: "label", triggerLabel: "claude-work", triggerText: "claude-work",
@@ -30,11 +42,13 @@ const DEFAULTS = {
 
 function projectEnv(p, cred) {
   const cfg = { ...DEFAULTS, ...p };
+  const repos = lib.normalizeRepos(cfg);
   const env = { ...process.env };
   env.PROJECT_ID = cfg.id || "";
   env.WORK_DIR = cfg.workDir;
-  env.REPO_URL = cfg.repoUrl;
-  env.BASE_BRANCH = cfg.baseBranch;
+  env.REPO_URL = (repos[0] && repos[0].url) || cfg.repoUrl || "";
+  env.BASE_BRANCH = (repos[0] && repos[0].baseBranch) || cfg.baseBranch || "main";
+  env.CARD_REPOS = reposToLines(repos);   // 기본=전체 repo(카드별로 좁혀짐)
   env.ASSIGNEE_EMAIL = cfg.assigneeEmail;
   env.ASSIGNEE_NAME = cfg.assigneeName;
   env.TRIGGER_MODE = cfg.triggerMode || "label";
@@ -76,19 +90,21 @@ async function detect(p, env) {
   });
 }
 
-function runCard(key, env) {
+async function runCard(key, env, cfg, cred) {
+  const e = { ...env };
+  try { e.CARD_REPOS = reposToLines(lib.cardRepos(cfg, await fetchLabels(cfg, cred, key))); } catch { /* 기본(전체) 사용 */ }
   return new Promise((resolve) => {
-    const c = spawn("bash", [path.join(SELF, "run-jira-claude.sh"), key, phase], { env, stdio: "inherit" });
+    const c = spawn("bash", [path.join(SELF, "run-jira-claude.sh"), key, phase], { env: e, stdio: "inherit" });
     c.on("close", () => resolve());
     c.on("error", () => resolve());
   });
 }
 
 // 동시 실행 상한 적용
-async function runWithCap(keys, env, cap) {
+async function runWithCap(keys, env, cap, cfg, cred) {
   let i = 0;
   const workers = Array.from({ length: Math.max(1, cap) }, async () => {
-    while (i < keys.length) { const k = keys[i++]; await runCard(k, env); }
+    while (i < keys.length) { const k = keys[i++]; await runCard(k, env, cfg, cred); }
   });
   await Promise.all(workers);
 }
@@ -98,12 +114,13 @@ async function runWithCap(keys, env, cap) {
   const creds = readJson(path.join(DASH, "project-credentials.json"), {});
   if (!projects.length) { log(`프로젝트가 없습니다 — 건너뜀`); return; }
   for (const p of projects) {
-    const { cfg, env } = projectEnv(p, creds[p.id]);
+    const cred = creds[p.id];
+    const { cfg, env } = projectEnv(p, cred);
     try {
       const keys = await detect(p, env);
       if (!keys.length) { log(`[${p.id}] ${phase} 대상 없음`); continue; }
       log(`[${p.id}] ${phase} 대상 ${keys.length}건: ${keys.join(", ")} (동시 ${cfg.maxParallel})`);
-      await runWithCap(keys, env, cfg.maxParallel || 3);
+      await runWithCap(keys, env, cfg.maxParallel || 3, cfg, cred);
       log(`[${p.id}] ${phase} 사이클 완료`);
     } catch (e) {
       log(`[${p.id}] ${phase} 오류: ${String((e && e.message) || e)}`);

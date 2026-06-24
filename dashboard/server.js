@@ -24,7 +24,8 @@ const HISTORY_PATH = path.join(SCRIPTS_DIR, "history.jsonl");      // run-jira-c
 // ----- 프로젝트 설정 기본값(템플릿) -----
 const DEFAULT_CONFIG = {
   workDir: SCRIPTS_DIR,
-  repoUrl: "",
+  repoUrl: "",                                  // (레거시) 단일 repo — repos[] 로 대체됨
+  repos: [],                                    // [{name,url,baseBranch}] 여러 repo
   baseBranch: "main",
   jiraSite: "",
   projectKey: "",
@@ -50,7 +51,9 @@ const DEFAULT_CONFIG = {
 
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
-const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, maskCreds, applyCreds } = lib;
+const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
+// 대상 repo 목록을 run-jira-claude.sh 에 넘길 줄 형식(name\turl\tbaseBranch)으로 직렬화
+const reposToLines = (repos) => (repos || []).map((r) => `${r.name}\t${r.url}\t${r.baseBranch || "main"}`).join("\n");
 const store = lib.createStore({
   projectsPath: PROJECTS_PATH, credsPath: PROJECT_CREDS_PATH,
   configPath: CONFIG_PATH, credPath: CRED_PATH, defaultConfig: DEFAULT_CONFIG,
@@ -95,10 +98,12 @@ function scriptEnv(id) {
   const cfg = getConfig(id);
   const cred = getCreds(cfg.id);
   const env = { ...process.env };
+  const repos = normalizeRepos(cfg);
   env.PROJECT_ID = cfg.id || "";
   env.WORK_DIR = cfg.workDir;
-  env.REPO_URL = cfg.repoUrl;
-  env.BASE_BRANCH = cfg.baseBranch;
+  env.REPO_URL = (repos[0] && repos[0].url) || cfg.repoUrl || "";   // 폴백용 첫 repo
+  env.BASE_BRANCH = (repos[0] && repos[0].baseBranch) || cfg.baseBranch || "main";
+  env.CARD_REPOS = reposToLines(repos);                              // 기본=전체 repo(카드 라벨로 좁혀짐)
   env.ASSIGNEE_EMAIL = cfg.assigneeEmail;
   env.ASSIGNEE_NAME = cfg.assigneeName;
   env.TRIGGER_MODE = cfg.triggerMode || "label";
@@ -149,7 +154,7 @@ function runOnce(type) {
   return { ok: true, pid: proc.pid };
 }
 // 특정 카드 1건 즉시 실행(프로젝트 env 주입)
-function runCard(key, phase, stamp, projectId) {
+function runCard(key, phase, stamp, projectId, reposLines) {
   const script = path.join(SCRIPTS_DIR, "run-jira-claude.sh");
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
   const logPath = path.join(SCRIPTS_DIR, `loop-${phase}.log`);
@@ -158,7 +163,9 @@ function runCard(key, phase, stamp, projectId) {
     fd = fs.openSync(logPath, "a");
     fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${phase.toUpperCase()}: ${key} [${projectId}]\n`);
   } catch (e) { return { ok: false, message: String(e.message || e) }; }
-  const proc = spawn("bash", [script, key, phase], { cwd: SCRIPTS_DIR, env: scriptEnv(projectId), detached: true, stdio: ["ignore", fd, fd] });
+  const env = scriptEnv(projectId);
+  if (reposLines != null) env.CARD_REPOS = reposLines;   // 카드 라벨로 좁힌 대상 repo
+  const proc = spawn("bash", [script, key, phase], { cwd: SCRIPTS_DIR, env, detached: true, stdio: ["ignore", fd, fd] });
   try { fs.closeSync(fd); } catch {}
   proc.unref();
   return { ok: true, pid: proc.pid };
@@ -293,13 +300,20 @@ app.post("/api/loops/:type/run-once", (req, res) => {
 });
 
 // 특정 카드 1건 즉시 실행
-app.post("/api/cards/:key/run", (req, res) => {
+app.post("/api/cards/:key/run", async (req, res) => {
   const key = req.params.key;
   const phase = (req.body || {}).phase;
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
   if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build" });
-  try { const { id } = resolveProject(req); res.json(runCard(key, phase, new Date().toISOString(), id)); }
-  catch (e) { fail(res, e); }
+  try {
+    const { id, cfg, cred } = resolveProject(req);
+    let reposLines;
+    try {
+      const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
+      reposLines = reposToLines(cardRepos(cfg, (issue.fields && issue.fields.labels) || []));
+    } catch { reposLines = null; } // 라벨 조회 실패 시 scriptEnv 기본(전체 repo) 사용
+    res.json(runCard(key, phase, new Date().toISOString(), id, reposLines));
+  } catch (e) { fail(res, e); }
 });
 
 // REST 탐지
@@ -434,7 +448,10 @@ app.post("/api/jira/issue", async (req, res) => {
       } catch (e) { if (e.hierarchy) throw e; /* 검증 호출 실패(네트워크 등)는 무시하고 그대로 시도 */ }
       fields.parent = { key: parentKey };
     }
-    if (b.addTriggerLabel) fields.labels = [cfg.triggerLabel || "claude-work"];
+    const labels = [];
+    if (b.addTriggerLabel) labels.push(cfg.triggerLabel || "claude-work");
+    (Array.isArray(b.repos) ? b.repos : []).forEach((n) => { if (n) labels.push(REPO_LABEL_PREFIX + n); }); // 대상 repo 라벨
+    if (labels.length) fields.labels = labels;
     if (b.assignSelf) { const me = await jiraReq("GET", "/rest/api/3/myself", null, cfg, cred); if (me.accountId) fields.assignee = { accountId: me.accountId }; }
     const created = await jiraReq("POST", "/rest/api/3/issue", { fields }, cfg, cred);
     const atts = Array.isArray(b.attachments) ? b.attachments : [];

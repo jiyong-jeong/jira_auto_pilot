@@ -12,6 +12,31 @@ function slugify(s) {
   return String(s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "proj";
 }
 
+// 카드↔repo 매핑 라벨 접두사 (Jira 라벨 안전 문자만 사용: repo_<name>)
+const REPO_LABEL_PREFIX = "repo_";
+function repoNameFromUrl(url) {
+  return slugify(String(url || "").replace(/\.git$/, "").split("/").filter(Boolean).pop() || "repo");
+}
+// 프로젝트의 repo 목록 정규화: repos 배열 우선, 없으면 레거시 repoUrl 1개로 변환
+function normalizeRepos(p) {
+  if (Array.isArray(p.repos) && p.repos.length) {
+    return p.repos.filter((r) => r && r.url).map((r) => ({
+      name: r.name || repoNameFromUrl(r.url),
+      url: r.url,
+      baseBranch: r.baseBranch || p.baseBranch || "main",
+    }));
+  }
+  if (p.repoUrl) return [{ name: repoNameFromUrl(p.repoUrl), url: p.repoUrl, baseBranch: p.baseBranch || "main" }];
+  return [];
+}
+// 카드 라벨로 대상 repo 결정: repo_<name> 라벨과 매칭. 없으면 첫 repo(기본).
+function cardRepos(p, labels) {
+  const repos = normalizeRepos(p);
+  const names = (labels || []).filter((l) => l.indexOf(REPO_LABEL_PREFIX) === 0).map((l) => l.slice(REPO_LABEL_PREFIX.length));
+  const sel = repos.filter((r) => names.includes(r.name));
+  return sel.length ? sel : (repos.length ? [repos[0]] : []);
+}
+
 function triggerClause(cfg) {
   return cfg.triggerMode === "text" ? `text ~ "${cfg.triggerText}"` : `labels = "${cfg.triggerLabel}"`;
 }
@@ -100,7 +125,7 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
   }
   function listProjects() {
     const raw = readJson(projectsPath, { projects: [] });
-    return (raw.projects || []).map((p) => ({ ...defaultConfig, ...p }));
+    return (raw.projects || []).map((p) => { const m = { ...defaultConfig, ...p }; return { ...m, repos: normalizeRepos(m) }; });
   }
   function getProject(id) { return listProjects().find((p) => p.id === id) || null; }
   function defaultProjectId() { const l = listProjects(); return l.length ? l[0].id : null; }
@@ -127,4 +152,5 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
 module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
   adfToText, toADF, buildReplyADF, maskCreds, applyCreds, createStore,
+  REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
 };
