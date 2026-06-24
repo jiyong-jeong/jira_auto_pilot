@@ -21,11 +21,9 @@ if (!["plan", "build"].includes(phase)) { console.error("usage: run-cycle.js <pl
 const ts = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const log = (m) => console.log(`[${ts()}] ${m}`);
 const readJson = (p, f) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return f; } };
-// repo 별 env 파일(없으면 프로젝트 공통 env 폴백) + 대상 경로
+// repo 별 env 파일(repo 전용만; 없으면 미복사 — run-jira 가 -f 로 확인)
 function repoEnvSrc(cfg, repoName) {
-  const p = path.join(cfg.workDir || SELF, `work-${cfg.id}-${repoName}.env`);
-  if (fs.existsSync(p)) return p;
-  return cfg.envPath || path.join(cfg.workDir || SELF, `work-${cfg.id}.env`);
+  return path.join(cfg.workDir || SELF, `work-${cfg.id}-${repoName}.env`);
 }
 const reposToLines = (cfg, repos, envSrcOverride) => (repos || []).map((r) =>
   [r.name, r.url, r.baseBranch || "main", envSrcOverride || repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")

@@ -161,7 +161,6 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [config, setConfig] = useState(proj);
   const [creds, setCreds] = useState({});
   const [credInput, setCredInput] = useState({ anthropicApiKey: "", githubToken: "", atlassianEmail: "", atlassianToken: "", slackWebhookUrl: "" });
-  const [envFile, setEnvFile] = useState({ path: "", content: "", mtime: null, exists: false, loaded: false });
   const [jiraMeta, setJiraMeta] = useState({ issueTypes: [], epics: [], loaded: false, err: "" });
   const [newCard, setNewCard] = useState({ issueType: "", summary: "", description: "", epicKey: "", parentInput: "", addTriggerLabel: true, assignSelf: true, attachments: [], repos: [], env: "" });
   const [creating, setCreating] = useState(false);
@@ -194,13 +193,12 @@ function ProjectCard({ proj, onDeleted, flash }) {
     const c = await api.get(`/api/projects/${PID}/credentials`);
     setCreds(c); setCredInput((p) => ({ ...p, atlassianEmail: c.atlassianEmail || "" }));
   };
-  const loadEnv = async () => { const r = await api.get(withP("/api/env")); if (r.ok) setEnvFile({ path: r.path, content: r.content, mtime: r.mtime, exists: r.exists, loaded: true }); };
   const loadMeta = async () => {
     const r = await api.get(withP("/api/jira/meta"));
     if (r.ok) { setJiraMeta({ issueTypes: r.issueTypes || [], epics: r.epics || [], loaded: true, err: "" }); setNewCard((p) => p.issueType ? p : { ...p, issueType: (r.issueTypes.find((t) => t.name === "Task") || r.issueTypes[0] || {}).name || "" }); }
     else setJiraMeta({ issueTypes: [], epics: [], loaded: true, err: r.message || "메타 조회 실패" });
   };
-  useEffect(() => { loadCreds(); loadEnv(); loadMeta(); }, []);
+  useEffect(() => { loadCreds(); loadMeta(); }, []);
   // 카드 상태 자동 갱신: 마운트 시 1회 + 60초마다(프로젝트 키 있을 때만). 수동 "조회"도 그대로 사용 가능.
   useEffect(() => {
     if (!proj.projectKey) return;
@@ -221,7 +219,6 @@ function ProjectCard({ proj, onDeleted, flash }) {
     setCredInput((p) => ({ ...p, anthropicApiKey: "", githubToken: "", atlassianToken: "", slackWebhookUrl: "" }));
     loadCreds(); flash("자격증명 저장됨");
   };
-  const saveEnv = async () => { const r = await api.post(withP("/api/env"), { content: envFile.content }); if (r.ok) { flash("env 저장됨 (.bak 백업)"); setEnvFile((p) => ({ ...p, mtime: r.mtime, exists: true })); } else flash(r.message || "저장 실패"); };
   const refineDesc = async () => {
     if (!newCard.description.trim()) { flash("정리할 설명을 먼저 입력하세요"); return; }
     setRefining(true);
@@ -334,7 +331,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
               {envOpen && (
                 <div className="mt-1 mb-2 pl-2 border-l-2 border-indigo-500/40">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-slate-400">{r.name} 전용 .env (비우면 프로젝트 공통 env 사용)</span>
+                    <span className="text-xs text-slate-400">{r.name} 전용 .env (카드 전용 env 가 있으면 그게 우선)</span>
                     <div className="flex gap-2">
                       <Btn color="green" onClick={() => saveRepoEnv(r.name)}>저장</Btn>
                       <button onClick={() => setRepoEnv({ repo: "", content: "" })} className="text-[11px] text-slate-400 hover:text-rose-300">닫기</button>
@@ -348,7 +345,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
             </div>
           );
         })}
-        <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. repo 마다 'env 대상경로'와 'env' 내용을 따로 지정 가능(미지정 시 아래 프로젝트 공통 env 사용).</p>
+        <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. repo 마다 'env 대상경로'와 'env' 내용을 따로 지정 가능. env 우선순위: 카드 전용(claude.env) &gt; repo 전용.</p>
       </div>
 
       {/* 자격증명 (프로젝트별) */}
@@ -369,38 +366,6 @@ function ProjectCard({ proj, onDeleted, flash }) {
           <Field label={`Slack Webhook ${credSet("slackWebhookUrl") ? "✓" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."}
             info="이 프로젝트의 처리 완료/실패 알림. 비우면 스킵." />
         </div>
-      </div>
-
-      {/* .env */}
-      <div className="mt-4 pt-4 border-t border-slate-700">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-300">프로젝트 공통 env (.env) — repo별 env 미지정 시 사용</span>
-          {config.envMode !== "path" && <div className="flex gap-2"><Btn color="slate" onClick={loadEnv}>불러오기</Btn><Btn color="green" onClick={saveEnv} disabled={!envFile.loaded}>내용 저장</Btn></div>}
-        </div>
-        <label className="block mb-3">
-          <span className="text-sm text-slate-400">제공 방식</span>
-          <select value={config.envMode || "content"} onChange={(e) => setConfig({ ...config, envMode: e.target.value })}
-            className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
-            <option value="content">내용 직접 입력</option><option value="path">파일 경로 지정</option>
-          </select>
-        </label>
-        <Field label="복사 대상 경로 (repo 내 상대경로, 비우면 루트)" value={config.envDest} onChange={(v) => setConfig({ ...config, envDest: v })} placeholder="예: src/main/resources/application-private.properties"
-          info="env 파일을 clone 한 repo 의 이 경로로 복사합니다(상위 폴더 자동 생성, .git/info/exclude 로 커밋 차단). Spring Boot 면 src/main/resources/application-private.properties, Node 면 .env 처럼 프로젝트에 맞게 지정. 비우면 repo 루트에 원본 파일명으로 복사." />
-        {config.envMode === "path" ? (
-          <div>
-            <Field label="사용할 .env 파일 경로 (그대로 복사)" value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder="/abs/path/to/.env" />
-            <p className="text-xs text-slate-500">지정 파일을 대상 repo 의 .env 로 복사. "설정 저장"만 누르세요.</p>
-          </div>
-        ) : (
-          <div>
-            <Field label={`저장 경로 (비우면 work-${PID}.env)`} value={config.envPath} onChange={(v) => setConfig({ ...config, envPath: v })} placeholder={`비우면 work-${PID}.env`} />
-            <div className="text-xs text-slate-400 mb-1">{envFile.loaded ? (envFile.exists ? `현재 파일 수정: ${new Date(envFile.mtime).toLocaleString()}` : "파일 없음 — 저장 시 생성") : "‘불러오기’ 또는 바로 입력 후 ‘내용 저장’"}</div>
-            <textarea value={envFile.content} onChange={(e) => setEnvFile({ ...envFile, content: e.target.value, loaded: true })} spellCheck={false}
-              placeholder="KEY=VALUE 형식으로 .env 내용 직접 입력"
-              className="w-full h-48 bg-black/60 border border-slate-700 rounded-lg p-3 text-xs font-mono focus:outline-none focus:border-indigo-400" />
-            <p className="text-xs text-amber-300/80 mt-1">⚠ 시크릿. 저장 시 .bak 백업, 대상 repo 복사 시 .git/info/exclude 로 커밋 차단.</p>
-          </div>
-        )}
       </div>
 
       {/* 카드 등록 */}

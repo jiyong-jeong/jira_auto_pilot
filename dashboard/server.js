@@ -53,9 +53,9 @@ const DEFAULT_CONFIG = {
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
 const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
-// repo 별 env 파일 경로(없으면 프로젝트 공통 env 로 폴백) — 분리 저장
+// repo 별 env 파일 경로(repo 전용 env 만 사용; 없으면 미복사 — run-jira 가 -f 로 확인)
 function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
-function repoEnvSrc(cfg, repoName) { const p = repoEnvFile(cfg, repoName); return fs.existsSync(p) ? p : projectEnvPath(cfg); }
+function repoEnvSrc(cfg, repoName) { return repoEnvFile(cfg, repoName); }
 // 카드 전용 env 첨부 파일명 + 다운로드 보관 위치(로컬, gitignore)
 const CARD_ENV_NAME = "claude.env";
 function cardEnvLocal(cfg, key) { return path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state", `${key}.env`); }
