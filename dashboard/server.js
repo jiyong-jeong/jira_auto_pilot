@@ -346,11 +346,12 @@ app.get("/api/cards", async (req, res) => {
       return "plan-ready";
     };
     const issues = (data.issues || []).map((i) => {
+      const catKey = i.fields.status?.statusCategory?.key; // "new" | "indeterminate" | "done"
       const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}` };
       const proc = procInfo(i.key);
       let stage;
-      if (it.status === cfg.doneStatus) stage = "done";        // 완료 상태가 최우선
-      else if (proc) stage = "processing";                     // 처리 중(락 존재)
+      if (catKey === "done" || it.status === cfg.doneStatus) stage = "done"; // 상태 카테고리 Done 이거나 설정 완료 상태명 일치
+      else if (proc) stage = "processing";                                   // 처리 중(락 존재)
       else stage = labelStage(it);
       return { ...it, stage, proc };
     });
