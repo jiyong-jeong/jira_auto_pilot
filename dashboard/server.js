@@ -164,17 +164,18 @@ function runOnce(type) {
   return { ok: true, pid: proc.pid };
 }
 // 특정 카드 1건 즉시 실행(프로젝트 env 주입)
-function runCard(key, phase, stamp, projectId, reposLines) {
+function runCard(key, phase, stamp, projectId, reposLines, rework) {
   const script = path.join(SCRIPTS_DIR, "run-jira-claude.sh");
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
   const logPath = path.join(SCRIPTS_DIR, `loop-${phase}.log`);
   let fd;
   try {
     fd = fs.openSync(logPath, "a");
-    fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${phase.toUpperCase()}: ${key} [${projectId}]\n`);
+    fs.writeSync(fd, `[${stamp}] (단건 즉시 실행) ${rework ? "REWORK" : phase.toUpperCase()}: ${key} [${projectId}]\n`);
   } catch (e) { return { ok: false, message: String(e.message || e) }; }
   const env = scriptEnv(projectId);
   if (reposLines != null) env.CARD_REPOS = reposLines;   // 카드 라벨로 좁힌 대상 repo
+  if (rework) env.REWORK = "1";                          // 기존 PR 리뷰 반영 모드
   const proc = spawn("bash", [script, key, phase], { cwd: SCRIPTS_DIR, env, detached: true, stdio: ["ignore", fd, fd] });
   try { fs.closeSync(fd); } catch {}
   proc.unref();
@@ -312,17 +313,24 @@ app.post("/api/loops/:type/run-once", (req, res) => {
 // 특정 카드 1건 즉시 실행
 app.post("/api/cards/:key/run", async (req, res) => {
   const key = req.params.key;
-  const phase = (req.body || {}).phase;
+  const b = req.body || {};
+  const phase = b.phase;
+  const rework = !!b.rework;
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
   if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build" });
   try {
     const { id, cfg, cred } = resolveProject(req);
+    // rework: 메모가 있으면 Jira 코멘트로 먼저 남김(반영 요청)
+    if (rework && String(b.memo || "").trim()) {
+      try { await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/comment`, { body: toADF(`[리뷰 반영 요청]\n${b.memo}`) }, cfg, cred); }
+      catch (e) { return res.json({ ok: false, message: "메모 코멘트 작성 실패: " + e.message }); }
+    }
     let reposLines;
     try {
       const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
       reposLines = reposToLines(cfg, cardRepos(cfg, (issue.fields && issue.fields.labels) || []));
     } catch { reposLines = null; } // 라벨 조회 실패 시 scriptEnv 기본(전체 repo) 사용
-    res.json(runCard(key, phase, new Date().toISOString(), id, reposLines));
+    res.json(runCard(key, phase, new Date().toISOString(), id, reposLines, rework));
   } catch (e) { fail(res, e); }
 });
 

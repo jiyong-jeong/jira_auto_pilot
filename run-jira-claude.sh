@@ -191,6 +191,27 @@ ${REPO_LIST_TEXT}
 - 질문이 없다면, '질문 없음 — 구현 준비 완료' 라는 코멘트를 남기고, 마찬가지로 담당자에게 '${ANSWERED_LABEL}' 라벨 추가를 요청하세요.
 - 코멘트 작성에 성공한 뒤, 이 이슈에 '${PLANNED_LABEL}' 라벨을 추가하세요.
   (이 라벨은 build 루프가 이 카드를 인식하고, plan 루프가 중복 처리하지 않도록 하는 표시입니다.)"
+elif [[ -n "${REWORK:-}" ]]; then
+  echo ">> [${ISSUE_KEY}] [REWORK] 기존 PR 리뷰 반영 (대상 repo ${#R_URL[@]}개)"
+  PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 의 '기존 PR'에 리뷰 피드백을 반영합니다. 새 PR/새 브랜치는 만들지 마세요.
+대상 repo 들은 아래 경로에 clone 되어 있습니다(여러 repo 일 수 있음):
+${REPO_LIST_TEXT}
+
+[매우 중요] 헤드리스 1회 실행입니다. 백그라운드로 미루지 말고 이 턴 안에서 끝까지 동기 수행하세요.
+
+각 repo 에 대해:
+1. 'gh pr list --state open --search \"${ISSUE_KEY}\"' 로 이 이슈의 열린 PR 을 찾으세요. 없으면 그 repo 는 건너뜁니다(반영 대상 아님).
+2. 그 PR 의 head 브랜치를 checkout 하세요 (git fetch origin 후 해당 브랜치로).
+3. 반영할 피드백을 모으세요:
+   - GitHub 리뷰: 'gh pr view <번호> --comments' 및 'gh api repos/{owner}/{repo}/pulls/{번호}/comments' · '.../reviews' 의 리뷰 코멘트/스레드.
+   - Jira: 이슈 ${ISSUE_KEY} 의 '최신 코멘트'(특히 담당자 ${ASSIGNEE_NAME} 가 남긴 리뷰 반영 요청).
+4. 요청된 변경을 구현하세요.
+5. PR 전 검증: 테스트 수단(${TEST_DESC})이 있으면 통과할 때까지 수정, 없으면 빌드(${BUILD_DESC})만 시도(수단 없으면 생략).
+6. '같은 브랜치'에 커밋(메시지 하단에 '${ISSUE_KEY}' 명시) 후 'origin' 으로 push 하면 기존 PR 이 자동 갱신됩니다. (새 PR 생성 금지)
+   - env 파일(.env 또는 복사된 env)은 절대 커밋/푸시하지 마세요.
+7. 반영 후 Jira 이슈 ${ISSUE_KEY} 에 '리뷰 반영 완료' 코멘트(반영 항목 요약 + 갱신된 PR URL)를 남기세요. 이슈 '상태는 변경하지 마세요'.
+PR 을 하나도 갱신하지 못했으면(반영할 PR 없음 등) 사유를 출력하고 비정상 종료하세요.
+완료 후 갱신한 PR URL 들을 출력하세요."
 else
   echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR (대상 repo ${#R_URL[@]}개)"
   PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 를 아래 대상 repo 들에서 구현합니다(여러 repo 일 수 있음). 각 repo 는 표시된 경로에 clone 되어 있습니다:
@@ -267,20 +288,22 @@ if [[ "${CLAUDE_OK}" -eq 0 ]]; then
   if grep -q 'SKIP:' "${CLAUDE_OUT}"; then
     RESULT="skip"
   elif [[ "${PHASE}" == "build" && -z "${PR_URL}" ]]; then
-    # build 인데 PR URL 이 없으면 미완료(예: claude 가 작업을 백그라운드로 미루고 종료) → 실패로 처리, 다음 주기 재시도
+    # build/rework 인데 PR URL 이 없으면 미완료(예: 작업을 백그라운드로 미루고 종료) → 재시도 대상
     RESULT="incomplete"
-    echo ">> [${ISSUE_KEY}] build 가 PR 없이 종료됨 → 미완료(재시도 대상)" >&2
+    echo ">> [${ISSUE_KEY}] PR 없이 종료됨 → 미완료(재시도 대상)" >&2
+  elif [[ -n "${REWORK:-}" ]]; then
+    RESULT="rework"
   else
     RESULT="success"
   fi
 fi
 
-if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" ]]; then
+if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" || "${RESULT}" == "rework" ]]; then
   rm -f "${FAIL_FILE}"
   echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, result=${RESULT})"
   record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
-  if [[ "${RESULT}" == "success" ]]; then
-    MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
+  if [[ "${RESULT}" == "success" || "${RESULT}" == "rework" ]]; then
+    [[ "${RESULT}" == "rework" ]] && MSG="🔧 [${ISSUE_KEY}] 리뷰 반영 완료(PR 갱신)" || MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
     [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
     [[ -n "${BRANCH_OUT}" ]] && MSG="${MSG} · branch: ${BRANCH_OUT}"
     notify_slack "${MSG}"

@@ -96,6 +96,7 @@ const resultBadge = {
   "skip": ["스킵(답변대기)", "bg-slate-500/20 text-slate-300 border-slate-500/40"],
   "skip-idempotent": ["스킵(중복방지)", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
   "incomplete": ["미완료(PR없음·재시도)", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
+  "rework": ["리뷰 반영(PR 갱신)", "bg-cyan-500/20 text-cyan-300 border-cyan-500/40"],
   "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
 };
 
@@ -123,6 +124,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [posting, setPosting] = useState(false);
   const [claudeLog, setClaudeLog] = useState(null);
   const [repoEnv, setRepoEnv] = useState({ repo: "", content: "" });
+  const [reworkMemo, setReworkMemo] = useState("");
 
   const credSet = (k) => creds[k] === true;
   const openRepoEnv = async (name) => {
@@ -197,6 +199,11 @@ function ProjectCard({ proj, onDeleted, flash }) {
     else flash(r.message || "등록 실패");
   };
   const runCardNow = async (key, phase) => { const r = await api.post(`/api/cards/${key}/run`, { phase, project: PID }); flash(r.ok ? `${key} ${phase} 즉시 실행 — Claude 실행 로그 확인` : (r.message || "실패")); if (r.ok) showClaudeLog(key, phase); };
+  const reworkCard = async (key) => {
+    const r = await api.post(`/api/cards/${key}/run`, { phase: "build", rework: true, memo: reworkMemo, project: PID });
+    flash(r.ok ? `${key} 리뷰 반영 시작 — 기존 PR 갱신(로그 확인)` : (r.message || "실패"));
+    if (r.ok) { setReworkMemo(""); showClaudeLog(key, "build"); }
+  };
   const showClaudeLog = async (key, phase) => { setClaudeLog({ key, phase, text: "불러오는 중…" }); const r = await api.get(withP(`/api/claude-log/${key}/${phase}?lines=600`)); setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.ok ? r.log : (r.message || "조회 실패") } : p); };
   const del = async () => { if (!window.confirm(`프로젝트 '${config.name || PID}' 를 삭제할까요? (설정/자격증명만 제거, Jira/repo 는 영향 없음)`)) return; await api.del(`/api/projects/${PID}`); onDeleted(); };
 
@@ -441,6 +448,16 @@ function ProjectCard({ proj, onDeleted, flash }) {
                                 <pre className="bg-black/60 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 h-72 overflow-auto">{claudeLog.text || "(로그 없음)"}</pre>
                               </div>
                             )}
+                            {/* 리뷰 반영(기존 PR 갱신) */}
+                            <div className="mb-4 p-2 rounded bg-cyan-500/5 border border-cyan-500/20">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-xs text-cyan-300">리뷰 반영 (기존 PR 갱신 · 새 PR 안 만듦)</span>
+                                <Btn color="indigo" onClick={() => reworkCard(c.key)}>리뷰 반영 실행</Btn>
+                              </div>
+                              <textarea value={reworkMemo} onChange={(e) => setReworkMemo(e.target.value)} spellCheck={false}
+                                placeholder="(선택) 고칠 내용을 적으면 Jira 코멘트로 남기고 반영합니다. 비우면 GitHub PR 리뷰·기존 코멘트만 보고 반영."
+                                className="w-full h-20 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+                            </div>
                             <div className="text-xs text-slate-400 mb-1">원문 설명</div>
                             <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
                             <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
