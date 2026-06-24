@@ -47,9 +47,11 @@ function detectJql(mode, cfg) {
   // 완료 제외: 상태 카테고리 Done + 설정한 완료 상태명(doneStatus) 둘 다. (워크플로마다 완료가
   // 'Done 카테고리'일 수도, 'DEV COMPLETED' 처럼 카테고리가 다른 커스텀 상태일 수도 있어 둘 다 제외)
   const doneName = cfg.doneStatus ? ` AND status != "${cfg.doneStatus}"` : "";
+  const prLabel = cfg.prOpenLabel || "claude-pr";
   const base = `assignee = currentUser() AND statusCategory != Done${doneName} AND ${triggerClause(cfg)}`;
   if (mode === "plan") return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
-  return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}"${failed}${proj}`;
+  // build: PR 을 이미 올린(claude-pr) 카드는 병합 대기 상태이므로 재빌드 대상에서 제외
+  return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}" AND (labels != "${prLabel}" OR labels IS EMPTY)${failed}${proj}`;
 }
 
 function adfToText(node) {

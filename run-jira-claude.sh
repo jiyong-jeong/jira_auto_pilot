@@ -42,6 +42,7 @@ DONE_STATUS="${DONE_STATUS:-DEV COMPLETED}"
 PLANNED_LABEL="${PLANNED_LABEL:-claude-planned}"
 ANSWERED_LABEL="${ANSWERED_LABEL:-claude-answered}"   # 담당자가 답변 완료를 알리는 명시 라벨(build 진입 게이트)
 FAILED_LABEL="${FAILED_LABEL:-claude-failed}"   # 반복 실패 카드 표시(탐지 제외)
+PR_OPEN_LABEL="${PR_OPEN_LABEL:-claude-pr}"     # PR 올림(병합 대기) 표시 — build 가 추가, 병합 시 완료 전환
 MAX_RETRIES="${MAX_RETRIES:-3}"                 # 연속 실패 N회 초과 시 실패 처리
 TEST_CMD="${TEST_CMD:-}"                        # 테스트 명령(비우면 claude 가 자동 감지)
 BUILD_CMD="${BUILD_CMD:-}"                      # 빌드 명령(비우면 claude 가 자동 감지)
@@ -243,9 +244,9 @@ PR 을 하나도 생성하지 못했다면 절대 완료로 간주하지 말고,
 6. 최소 한 개 repo 에서 PR 을 생성한 뒤 마무리로:
    a) ${SUMMARY_INSTR}
       (변경한 모든 repo 의 PR URL·브랜치를 repo 별로 나열하세요.)
-   b) 이슈 상태를 '${DONE_STATUS}' 로 전환하세요. 가능한 transition 을 먼저 조회한 뒤 전환하고,
-      전환이 불가능하면 사유를 출력하세요.
-완료 후 결과(repo별 테스트/빌드 결과 · 브랜치 · PR URL · 상태) 요약을 출력하세요."
+   b) 이슈에 '${PR_OPEN_LABEL}' 라벨을 추가하세요(= PR 올림/병합 대기 표시). 이슈 '상태는 변경하지 마세요'.
+      (병합은 사람이 리뷰 후 대시보드에서 수행하며, 그때 완료 상태로 전환됩니다.)
+완료 후 결과(repo별 테스트/빌드 결과 · 브랜치 · PR URL) 요약을 출력하세요."
 fi
 
 # ===== 실행 + 실패 재시도/백오프 처리 =====

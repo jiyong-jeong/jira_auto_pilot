@@ -31,6 +31,7 @@ test("detectJql: plan/build 게이트 + 제외 필터 + 프로젝트", () => {
   assert.match(plan, /AND project = "EKYB"/);
   const build = lib.detectJql("build", cfg);
   assert.match(build, /labels = "P" AND labels = "A"/);           // build: planned+answered 둘 다
+  assert.match(build, /\(labels != "claude-pr" OR labels IS EMPTY\)/);  // PR 올린 카드 제외
   assert.match(build, /\(labels != "F" OR labels IS EMPTY\)/);
 });
 

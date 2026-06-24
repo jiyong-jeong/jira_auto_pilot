@@ -43,7 +43,7 @@ async function fetchLabels(cfg, cred, key) {
 
 const DEFAULTS = {
   workDir: SELF, baseBranch: "main", triggerMode: "label", triggerLabel: "claude-work", triggerText: "claude-work",
-  doneStatus: "DEV COMPLETED", plannedLabel: "claude-planned", answeredLabel: "claude-answered", failedLabel: "claude-failed",
+  doneStatus: "DEV COMPLETED", plannedLabel: "claude-planned", answeredLabel: "claude-answered", failedLabel: "claude-failed", prOpenLabel: "claude-pr",
   maxRetries: 3, maxParallel: 3, intervalSeconds: 3600, envMode: "content", envPath: "", envDest: "", cloneBase: path.join(SELF, "repos"),
   testCmd: "", buildCmd: "", repoUrl: "", jiraSite: "", projectKey: "", assigneeEmail: "", assigneeName: "",
 };
@@ -66,6 +66,7 @@ function projectEnv(p, cred) {
   env.PLANNED_LABEL = cfg.plannedLabel;
   env.ANSWERED_LABEL = cfg.answeredLabel || "claude-answered";
   env.FAILED_LABEL = cfg.failedLabel || "claude-failed";
+  env.PR_OPEN_LABEL = cfg.prOpenLabel || "claude-pr";
   env.MAX_RETRIES = String(cfg.maxRetries || 3);
   env.TEST_CMD = cfg.testCmd || "";
   env.BUILD_CMD = cfg.buildCmd || "";

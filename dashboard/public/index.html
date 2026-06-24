@@ -87,6 +87,7 @@ const stageBadge = {
   "plan-ready": ["질문 대기", "bg-sky-500/20 text-sky-300 border-sky-500/40"],
   "awaiting-answer": ["답변 대기", "bg-violet-500/20 text-violet-300 border-violet-500/40"],
   "build-ready": ["개발 대기", "bg-amber-500/20 text-amber-300 border-amber-500/40"],
+  "await-merge": ["병합 대기", "bg-teal-500/20 text-teal-300 border-teal-500/40"],
   "processing": ["처리 중", "bg-indigo-500/20 text-indigo-300 border-indigo-500/40 animate-pulse"],
   "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
   "done": ["완료", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
@@ -262,6 +263,13 @@ function ProjectCard({ proj, onDeleted, flash }) {
     const r = await api.post(`/api/cards/${key}/run`, { phase: "build", rework: true, memo: reworkMemo, project: PID });
     flash(r.ok ? `${key} 리뷰 반영 시작 — 기존 PR 갱신(로그 확인)` : (r.message || "실패"));
     if (r.ok) { setReworkMemo(""); showClaudeLog(key, "build"); }
+  };
+  const mergeCard = async (key) => {
+    if (!window.confirm(`${key} 의 PR(들)을 rebase merge 하고 카드를 완료 처리할까요?`)) return;
+    const r = await api.post(`/api/cards/${key}/merge`, { project: PID });
+    if (r.ok) flash(`${key} 병합 ${r.merged}건${r.doneStatus ? ` · 완료(${r.doneStatus})` : ""}${r.errors?.length ? ` · 경고 ${r.errors.length}` : ""}`);
+    else flash(r.message || (r.errors?.length ? r.errors[0] : "병합 실패(열린 PR 없음/충돌/권한 확인)"));
+    loadCards();
   };
   const showClaudeLog = async (key, phase) => { setClaudeLog({ key, phase, text: "불러오는 중…" }); const r = await api.get(withP(`/api/claude-log/${key}/${phase}?lines=600`)); setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.ok ? r.log : (r.message || "조회 실패") } : p); };
   const del = async () => { if (!window.confirm(`프로젝트 '${config.name || PID}' 를 삭제할까요? (설정/자격증명만 제거, Jira/repo 는 영향 없음)`)) return; await api.del(`/api/projects/${PID}`); onDeleted(); };
@@ -516,6 +524,11 @@ function ProjectCard({ proj, onDeleted, flash }) {
                               <textarea value={reworkMemo} onChange={(e) => setReworkMemo(e.target.value)} spellCheck={false}
                                 placeholder="(선택) 고칠 내용을 적으면 Jira 코멘트로 남기고 반영합니다. 비우면 GitHub PR 리뷰·기존 코멘트만 보고 반영."
                                 className="w-full h-20 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+                            </div>
+                            {/* PR 병합(rebase) */}
+                            <div className="mb-4 p-2 rounded bg-teal-500/5 border border-teal-500/20 flex items-center justify-between">
+                              <span className="text-xs text-teal-300">PR 병합 (rebase merge · 병합되면 카드 완료 처리)</span>
+                              <Btn color="green" onClick={() => mergeCard(c.key)}>PR 병합</Btn>
                             </div>
                             <div className="text-xs text-slate-400 mb-1">원문 설명</div>
                             <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>

@@ -7,7 +7,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, execFile } = require("child_process");
 
 const app = express();
 app.use(express.json({ limit: "25mb" })); // 이미지(base64) 첨부 페이로드 허용
@@ -38,6 +38,7 @@ const DEFAULT_CONFIG = {
   plannedLabel: "claude-planned",
   answeredLabel: "claude-answered",
   failedLabel: "claude-failed",
+  prOpenLabel: "claude-pr",
   maxRetries: 3,
   maxParallel: 3,
   testCmd: "",
@@ -122,6 +123,7 @@ function scriptEnv(id) {
   env.PLANNED_LABEL = cfg.plannedLabel;
   env.ANSWERED_LABEL = cfg.answeredLabel || "claude-answered";
   env.FAILED_LABEL = cfg.failedLabel || "claude-failed";
+  env.PR_OPEN_LABEL = cfg.prOpenLabel || "claude-pr";
   env.MAX_RETRIES = String(cfg.maxRetries || 3);
   env.TEST_CMD = cfg.testCmd || "";
   env.BUILD_CMD = cfg.buildCmd || "";
@@ -229,6 +231,39 @@ async function jiraReq(method, urlPath, body, cfg, cred) {
   if (!res.ok) throw new Error(`Jira ${res.status}: ${txt.slice(0, 400)}`);
   return txt ? JSON.parse(txt) : {};
 }
+// ----- PR 병합(rebase) — gh CLI 결정적 실행 + Jira 완료 전환 -----
+function ghEnv(cred) { const e = { ...process.env }; if (cred && cred.githubToken) { e.GH_TOKEN = cred.githubToken; e.GITHUB_TOKEN = cred.githubToken; } return e; }
+function ownerRepo(url) { const m = String(url || "").replace(/\.git$/, "").match(/[:/]([^/:]+\/[^/]+?)$/); return m ? m[1] : null; }
+function gh(args, cred) {
+  return new Promise((resolve) => {
+    execFile("gh", args, { env: ghEnv(cred), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) =>
+      resolve({ ok: !err, stdout: stdout || "", stderr: stderr || (err && err.message) || "" }));
+  });
+}
+// 한 repo 의 이 이슈 관련 열린 PR 들을 rebase merge(+브랜치 삭제)
+async function mergeRepoPRs(repo, key, cred) {
+  const or = ownerRepo(repo.url);
+  if (!or) return { repo: repo.name, merged: [], errors: ["repo url 파싱 실패"] };
+  const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "open", "--json", "number,url"], cred);
+  let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
+  if (!prs.length) return { repo: repo.name, merged: [], errors: list.ok ? ["열린 PR 없음"] : [(list.stderr || "").slice(0, 160)] };
+  const merged = [], errors = [];
+  for (const pr of prs) {
+    const r = await gh(["pr", "merge", String(pr.number), "--repo", or, "--rebase", "--delete-branch"], cred);
+    if (r.ok) merged.push(pr.url); else errors.push(`#${pr.number}: ${(r.stderr || "").trim().slice(0, 160)}`);
+  }
+  return { repo: repo.name, merged, errors };
+}
+// 이슈를 완료 상태로 전환(doneStatus 이름 우선, 없으면 Done 카테고리 transition)
+async function transitionToDone(key, cfg, cred) {
+  const t = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, null, cfg, cred);
+  const trs = t.transitions || [];
+  const tr = trs.find((x) => x.to && x.to.name === cfg.doneStatus)
+    || trs.find((x) => x.to && x.to.statusCategory && x.to.statusCategory.key === "done");
+  if (!tr) throw new Error(`완료로 가는 transition 없음(가능: ${trs.map((x) => x.name).join(", ")})`);
+  await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { transition: { id: tr.id } }, cfg, cred);
+  return tr.to.name;
+}
 async function jiraAttach(issueKey, filename, dataBase64, contentType, cfg, cred) {
   const auth = jiraAuth(cred);
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^;]+;base64,/, ""), "base64");
@@ -334,6 +369,25 @@ app.post("/api/cards/:key/run", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// 카드의 PR(들)을 rebase merge 하고, 1개 이상 병합되면 카드를 완료 상태로 전환
+app.post("/api/cards/:key/merge", async (req, res) => {
+  const key = req.params.key;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  try {
+    const { cfg, cred } = resolveProject(req);
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
+    const repos = cardRepos(cfg, (issue.fields && issue.fields.labels) || []);
+    if (!repos.length) return res.json({ ok: false, message: "대상 repo 가 없습니다." });
+    const results = [];
+    for (const r of repos) results.push(await mergeRepoPRs(r, key, cred));
+    const merged = results.reduce((n, x) => n + x.merged.length, 0);
+    const errors = results.flatMap((x) => x.errors.map((e) => `${x.repo}: ${e}`));
+    let doneStatus = null;
+    if (merged > 0) { try { doneStatus = await transitionToDone(key, cfg, cred); } catch (e) { errors.push(`상태전환: ${e.message}`); } }
+    res.json({ ok: merged > 0, merged, doneStatus, errors, prs: results.flatMap((x) => x.merged) });
+  } catch (e) { fail(res, e); }
+});
+
 // REST 탐지
 app.get("/api/detect/:mode", async (req, res) => {
   if (!["plan", "build"].includes(req.params.mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
@@ -372,6 +426,7 @@ app.get("/api/cards", async (req, res) => {
     };
     const labelStage = (it) => {
       if (it.labels.includes(cfg.failedLabel)) return "failed";
+      if (it.labels.includes(cfg.prOpenLabel)) return "await-merge";   // PR 올림 → 병합 대기
       const planned = it.labels.includes(cfg.plannedLabel), answered = it.labels.includes(cfg.answeredLabel);
       if (planned && answered) return "build-ready";
       if (planned) return "awaiting-answer";
