@@ -21,7 +21,15 @@ if (!["plan", "build"].includes(phase)) { console.error("usage: run-cycle.js <pl
 const ts = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const log = (m) => console.log(`[${ts()}] ${m}`);
 const readJson = (p, f) => { try { return JSON.parse(fs.readFileSync(p, "utf8")); } catch { return f; } };
-const reposToLines = (repos) => (repos || []).map((r) => `${r.name}\t${r.url}\t${r.baseBranch || "main"}`).join("\n");
+// repo 별 env 파일(없으면 프로젝트 공통 env 폴백) + 대상 경로
+function repoEnvSrc(cfg, repoName) {
+  const p = path.join(cfg.workDir || SELF, `work-${cfg.id}-${repoName}.env`);
+  if (fs.existsSync(p)) return p;
+  return cfg.envPath || path.join(cfg.workDir || SELF, `work-${cfg.id}.env`);
+}
+const reposToLines = (cfg, repos) => (repos || []).map((r) =>
+  [r.name, r.url, r.baseBranch || "main", repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
+).join("\n");
 
 // 카드 라벨 조회(프로젝트 자격증명) → 대상 repo 결정용
 async function fetchLabels(cfg, cred, key) {
@@ -48,7 +56,7 @@ function projectEnv(p, cred) {
   env.WORK_DIR = cfg.workDir;
   env.REPO_URL = (repos[0] && repos[0].url) || cfg.repoUrl || "";
   env.BASE_BRANCH = (repos[0] && repos[0].baseBranch) || cfg.baseBranch || "main";
-  env.CARD_REPOS = reposToLines(repos);   // 기본=전체 repo(카드별로 좁혀짐)
+  env.CARD_REPOS = reposToLines(cfg, repos);   // 기본=전체 repo(카드별로 좁혀짐)
   env.ASSIGNEE_EMAIL = cfg.assigneeEmail;
   env.ASSIGNEE_NAME = cfg.assigneeName;
   env.TRIGGER_MODE = cfg.triggerMode || "label";
@@ -92,7 +100,7 @@ async function detect(p, env) {
 
 async function runCard(key, env, cfg, cred) {
   const e = { ...env };
-  try { e.CARD_REPOS = reposToLines(lib.cardRepos(cfg, await fetchLabels(cfg, cred, key))); } catch { /* 기본(전체) 사용 */ }
+  try { e.CARD_REPOS = reposToLines(cfg, lib.cardRepos(cfg, await fetchLabels(cfg, cred, key))); } catch { /* 기본(전체) 사용 */ }
   return new Promise((resolve) => {
     const c = spawn("bash", [path.join(SELF, "run-jira-claude.sh"), key, phase], { env: e, stdio: "inherit" });
     c.on("close", () => resolve());

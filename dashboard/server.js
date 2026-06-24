@@ -52,8 +52,13 @@ const DEFAULT_CONFIG = {
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
 const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
-// 대상 repo 목록을 run-jira-claude.sh 에 넘길 줄 형식(name\turl\tbaseBranch)으로 직렬화
-const reposToLines = (repos) => (repos || []).map((r) => `${r.name}\t${r.url}\t${r.baseBranch || "main"}`).join("\n");
+// repo 별 env 파일 경로(없으면 프로젝트 공통 env 로 폴백) — 분리 저장
+function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
+function repoEnvSrc(cfg, repoName) { const p = repoEnvFile(cfg, repoName); return fs.existsSync(p) ? p : projectEnvPath(cfg); }
+// run-jira-claude.sh 에 넘길 줄 형식: name<US>url<US>baseBranch<US>envSrc<US>envDest (US=\x1f, 빈 필드 보존)
+const reposToLines = (cfg, repos) => (repos || []).map((r) =>
+  [r.name, r.url, r.baseBranch || "main", repoEnvSrc(cfg, r.name), r.envDest || cfg.envDest || ""].join("\x1f")
+).join("\n");
 const store = lib.createStore({
   projectsPath: PROJECTS_PATH, credsPath: PROJECT_CREDS_PATH,
   configPath: CONFIG_PATH, credPath: CRED_PATH, defaultConfig: DEFAULT_CONFIG,
@@ -103,7 +108,7 @@ function scriptEnv(id) {
   env.WORK_DIR = cfg.workDir;
   env.REPO_URL = (repos[0] && repos[0].url) || cfg.repoUrl || "";   // 폴백용 첫 repo
   env.BASE_BRANCH = (repos[0] && repos[0].baseBranch) || cfg.baseBranch || "main";
-  env.CARD_REPOS = reposToLines(repos);                              // 기본=전체 repo(카드 라벨로 좁혀짐)
+  env.CARD_REPOS = reposToLines(cfg, repos);                         // 기본=전체 repo(카드 라벨로 좁혀짐)
   env.ASSIGNEE_EMAIL = cfg.assigneeEmail;
   env.ASSIGNEE_NAME = cfg.assigneeName;
   env.TRIGGER_MODE = cfg.triggerMode || "label";
@@ -310,7 +315,7 @@ app.post("/api/cards/:key/run", async (req, res) => {
     let reposLines;
     try {
       const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
-      reposLines = reposToLines(cardRepos(cfg, (issue.fields && issue.fields.labels) || []));
+      reposLines = reposToLines(cfg, cardRepos(cfg, (issue.fields && issue.fields.labels) || []));
     } catch { reposLines = null; } // 라벨 조회 실패 시 scriptEnv 기본(전체 repo) 사용
     res.json(runCard(key, phase, new Date().toISOString(), id, reposLines));
   } catch (e) { fail(res, e); }
@@ -529,7 +534,7 @@ app.get("/api/history", (req, res) => {
 app.get("/api/env", (req, res) => {
   try {
     const { cfg } = resolveProject(req);
-    const p = projectEnvPath(cfg);
+    const p = req.query.repo ? repoEnvFile(cfg, req.query.repo) : projectEnvPath(cfg);
     if (!fs.existsSync(p)) return res.json({ ok: true, path: p, exists: false, content: "", mtime: null, lines: 0 });
     const content = fs.readFileSync(p, "utf8");
     res.json({ ok: true, path: p, exists: true, content, mtime: fs.statSync(p).mtime.toISOString(), lines: content.split("\n").length });
@@ -538,7 +543,7 @@ app.get("/api/env", (req, res) => {
 app.post("/api/env", (req, res) => {
   try {
     const { cfg } = resolveProject(req);
-    const p = projectEnvPath(cfg);
+    const p = req.query.repo ? repoEnvFile(cfg, req.query.repo) : projectEnvPath(cfg);
     const content = (req.body && req.body.content != null) ? String(req.body.content) : "";
     if (fs.existsSync(p)) { try { fs.copyFileSync(p, `${p}.bak`); } catch {} }
     fs.mkdirSync(path.dirname(p), { recursive: true });

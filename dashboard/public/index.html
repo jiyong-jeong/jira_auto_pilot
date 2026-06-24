@@ -122,8 +122,18 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [replyTarget, setReplyTarget] = useState(null);
   const [posting, setPosting] = useState(false);
   const [claudeLog, setClaudeLog] = useState(null);
+  const [repoEnv, setRepoEnv] = useState({ repo: "", content: "" });
 
   const credSet = (k) => creds[k] === true;
+  const openRepoEnv = async (name) => {
+    setRepoEnv({ repo: name, content: "불러오는 중…" });
+    const r = await api.get(withP(`/api/env?repo=${encodeURIComponent(name)}`));
+    setRepoEnv((p) => p.repo === name ? { repo: name, content: r.ok ? r.content : "" } : p);
+  };
+  const saveRepoEnv = async (name) => {
+    const r = await api.post(withP(`/api/env?repo=${encodeURIComponent(name)}`), { content: repoEnv.content });
+    flash(r.ok ? `${name} env 저장됨` : (r.message || "저장 실패"));
+  };
 
   const loadCreds = async () => {
     const c = await api.get(`/api/projects/${PID}/credentials`);
@@ -230,16 +240,37 @@ function ProjectCard({ proj, onDeleted, flash }) {
         {(config.repos || []).length === 0 && <p className="text-amber-300/80 text-sm mb-2">repo 를 1개 이상 추가하세요. 카드 생성 시 대상 repo 로 선택됩니다.</p>}
         {(config.repos || []).map((r, i) => {
           const upd = (k, v) => setConfig({ ...config, repos: config.repos.map((x, idx) => idx === i ? { ...x, [k]: v } : x) });
+          const envOpen = repoEnv.repo === r.name;
           return (
-            <div key={i} className="grid grid-cols-12 gap-2 mb-2 items-center">
-              <input value={r.name || ""} onChange={(e) => upd("name", e.target.value)} placeholder="name(라벨용)" className="col-span-3 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
-              <input value={r.url || ""} onChange={(e) => upd("url", e.target.value)} placeholder="https://github.com/Org/repo.git" className="col-span-6 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
-              <input value={r.baseBranch || ""} onChange={(e) => upd("baseBranch", e.target.value)} placeholder="main" className="col-span-2 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
-              <button onClick={() => setConfig({ ...config, repos: config.repos.filter((_, idx) => idx !== i) })} className="col-span-1 text-slate-400 hover:text-rose-300">✕</button>
+            <div key={i} className="mb-2">
+              <div className="grid grid-cols-12 gap-2 items-center">
+                <input value={r.name || ""} onChange={(e) => upd("name", e.target.value)} placeholder="name(라벨용)" className="col-span-3 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+                <input value={r.url || ""} onChange={(e) => upd("url", e.target.value)} placeholder="https://github.com/Org/repo.git" className="col-span-4 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+                <input value={r.baseBranch || ""} onChange={(e) => upd("baseBranch", e.target.value)} placeholder="base" className="col-span-2 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+                <input value={r.envDest || ""} onChange={(e) => upd("envDest", e.target.value)} placeholder="env 대상경로(예:.env)" className="col-span-2 bg-slate-800 border border-slate-600 rounded-lg px-2 py-1.5 text-sm" />
+                <div className="col-span-1 flex gap-1 justify-end">
+                  <button onClick={() => r.name ? openRepoEnv(r.name) : flash("name 먼저 입력")} className="text-xs text-indigo-400 hover:text-indigo-300" title="이 repo 의 .env 편집">env</button>
+                  <button onClick={() => setConfig({ ...config, repos: config.repos.filter((_, idx) => idx !== i) })} className="text-slate-400 hover:text-rose-300">✕</button>
+                </div>
+              </div>
+              {envOpen && (
+                <div className="mt-1 mb-2 pl-2 border-l-2 border-indigo-500/40">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-slate-400">{r.name} 전용 .env (비우면 프로젝트 공통 env 사용)</span>
+                    <div className="flex gap-2">
+                      <Btn color="green" onClick={() => saveRepoEnv(r.name)}>저장</Btn>
+                      <button onClick={() => setRepoEnv({ repo: "", content: "" })} className="text-[11px] text-slate-400 hover:text-rose-300">닫기</button>
+                    </div>
+                  </div>
+                  <textarea value={repoEnv.content} onChange={(e) => setRepoEnv({ ...repoEnv, content: e.target.value })} spellCheck={false}
+                    placeholder="KEY=VALUE … (이 repo 에만 복사됨)"
+                    className="w-full h-40 bg-black/60 border border-slate-700 rounded-lg p-3 text-xs font-mono focus:outline-none focus:border-indigo-400" />
+                </div>
+              )}
             </div>
           );
         })}
-        <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. 카드 생성 시 여러 repo 를 선택해 대상으로 지정합니다.</p>
+        <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. repo 마다 'env 대상경로'와 'env' 내용을 따로 지정 가능(미지정 시 아래 프로젝트 공통 env 사용).</p>
       </div>
 
       {/* 자격증명 (프로젝트별) */}
@@ -265,7 +296,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
       {/* .env */}
       <div className="mt-4 pt-4 border-t border-slate-700">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-300">환경 변수 (.env) — 대상 repo로 복사</span>
+          <span className="text-sm font-medium text-slate-300">프로젝트 공통 env (.env) — repo별 env 미지정 시 사용</span>
           {config.envMode !== "path" && <div className="flex gap-2"><Btn color="slate" onClick={loadEnv}>불러오기</Btn><Btn color="green" onClick={saveEnv} disabled={!envFile.loaded}>내용 저장</Btn></div>}
         </div>
         <label className="block mb-3">

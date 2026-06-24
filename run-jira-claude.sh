@@ -122,25 +122,28 @@ fi
 printf '%s' "${PHASE}" > "${LOCK_DIR}.phase" 2>/dev/null || true
 trap 'rmdir "${LOCK_DIR}" 2>/dev/null || true; rm -f "${LOCK_DIR}.phase" 2>/dev/null || true' EXIT
 
-# ===== 대상 repo 목록 파싱 (CARD_REPOS 우선, 없으면 REPO_URL 단일) =====
-declare -a R_NAME R_URL R_BRANCH
+# ===== 대상 repo 목록 파싱 (CARD_REPOS: name\turl\tbaseBranch\tenvSrc\tenvDest; 없으면 REPO_URL 단일) =====
+declare -a R_NAME R_URL R_BRANCH R_ENVSRC R_ENVDEST
 if [[ -n "${CARD_REPOS}" ]]; then
-  while IFS=$'\t' read -r _n _u _b; do
+  while IFS=$'\x1f' read -r _n _u _b _es _ed; do
     [[ -z "${_u:-}" ]] && continue
     R_NAME+=("${_n:-$(basename "${_u%.git}")}"); R_URL+=("${_u}"); R_BRANCH+=("${_b:-main}")
+    R_ENVSRC+=("${_es:-${ENV_SRC}}"); R_ENVDEST+=("${_ed:-${ENV_DEST_REL}}")
   done <<< "${CARD_REPOS}"
 fi
 if [[ ${#R_URL[@]} -eq 0 ]]; then
   if [[ -z "${REPO_URL}" ]]; then echo "ERROR: 대상 repo 가 없습니다(CARD_REPOS/REPO_URL 미설정)." >&2; exit 1; fi
   R_NAME+=("$(basename "${REPO_URL%.git}")"); R_URL+=("${REPO_URL}"); R_BRANCH+=("${BASE_BRANCH}")
+  R_ENVSRC+=("${ENV_SRC}"); R_ENVDEST+=("${ENV_DEST_REL}")
 fi
 echo ">> [${ISSUE_KEY}] 대상 repo ${#R_URL[@]}개: ${R_NAME[*]}"
 
-# ===== clone + 클린업 + env 복사 (repo 별) =====
+# ===== clone + 클린업 + env 복사 (repo 별, env 도 repo별) =====
 mkdir -p "${CLONE_BASE}"
 REPO_LIST_TEXT=""
 for idx in "${!R_URL[@]}"; do
   rn="${R_NAME[$idx]}"; ru="${R_URL[$idx]}"; rb="${R_BRANCH[$idx]}"
+  res="${R_ENVSRC[$idx]}"; redr="${R_ENVDEST[$idx]}"
   rd="${CLONE_BASE}/${rn}-${ISSUE_KEY}"
   if [[ ! -d "${rd}/.git" ]]; then
     echo ">> [${ISSUE_KEY}] clone ${ru} -> ${rd}"
@@ -152,15 +155,15 @@ for idx in "${!R_URL[@]}"; do
   git -C "${rd}" clean -fd
   git -C "${rd}" checkout "${rb}"
   git -C "${rd}" reset --hard "origin/${rb}"
-  # env 복사(+ .git/info/exclude 로 커밋 차단)
-  if [[ -f "${ENV_SRC}" ]]; then
-    if [[ -n "${ENV_DEST_REL}" ]]; then ed="${rd}/${ENV_DEST_REL}"; ee="${ENV_DEST_REL}"; else ed="${rd}/${ENV_NAME}"; ee="${ENV_NAME}"; fi
-    mkdir -p "$(dirname "${ed}")"; cp "${ENV_SRC}" "${ed}"
+  # env 복사(repo별 envSrc → repo별 envDest, + .git/info/exclude 로 커밋 차단)
+  if [[ -n "${res}" && -f "${res}" ]]; then
+    if [[ -n "${redr}" ]]; then ed="${rd}/${redr}"; ee="${redr}"; else ed="${rd}/$(basename "${res}")"; ee="$(basename "${res}")"; fi
+    mkdir -p "$(dirname "${ed}")"; cp "${res}" "${ed}"
     exf="${rd}/.git/info/exclude"
     for pat in "${ee}" ".env"; do
       if [[ ! -f "${exf}" ]] || ! grep -qxF "${pat}" "${exf}"; then echo "${pat}" >> "${exf}"; fi
     done
-    echo ">> [${ISSUE_KEY}] (${rn}) env 복사: -> ${ed}"
+    echo ">> [${ISSUE_KEY}] (${rn}) env 복사: ${res} -> ${ed}"
   fi
   REPO_LIST_TEXT="${REPO_LIST_TEXT}- ${rn} (base 브랜치 ${rb}): ${rd}"$'\n'
 done
