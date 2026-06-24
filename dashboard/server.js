@@ -418,8 +418,10 @@ app.post("/api/jira/issue", async (req, res) => {
         if (pLv != null && cLv != null && pLv !== cLv + 1) {
           const sub = (proj2.issueTypes || []).find((t) => t.subtask);
           let hint;
-          if (cLv === 0 && pLv === 0) hint = `'${pType.name}'(${parentKey})은 '${fields.issuetype.name}'과 같은 계층이라 상위가 될 수 없습니다. 이 카드를 ${parentKey} 하위에 두려면 이슈 타입을 '${sub ? sub.name : "하위 작업"}'(Subtask)으로 선택하세요. 또는 상위에 에픽 키를 지정하세요.`;
-          else hint = `이슈 타입 '${fields.issuetype.name}'(레벨 ${cLv})과 상위 ${parentKey}(${pType.name}, 레벨 ${pLv})의 계층이 맞지 않습니다. 상위는 자식보다 한 단계 위여야 합니다(에픽 > 작업/스토리 > 하위작업).`;
+          const subName = sub ? sub.name : "Subtask";
+          if (cLv === 0 && pLv === 0) hint = `'${pType.name}'(${parentKey}) 하위에는 '${subName}'(하위 작업)만 만들 수 있습니다. 이슈 타입을 '${subName}'(으)로 바꾸면 ${parentKey} 하위로 생성됩니다. (작업/스토리 등 레벨0 타입을 두려면 상위는 '에픽'이어야 합니다.)`;
+          else if (cLv === 0 && pLv === 1) hint = `상위 ${parentKey} 가 에픽이 아니라 '${pType.name}'(레벨 ${pLv}) 입니다. 작업/스토리(레벨0)는 에픽 하위에만 둘 수 있습니다.`;
+          else hint = `이슈 타입 '${fields.issuetype.name}'(레벨 ${cLv})과 상위 ${parentKey}(${pType.name}, 레벨 ${pLv})의 계층이 맞지 않습니다. 상위는 자식보다 한 단계 위여야 합니다(에픽 > 작업/스토리/버그 > 하위작업). 버그/작업/스토리 하위에는 '${subName}'(을)를 쓰세요.`;
           throw new Error(hint);
         }
       } catch (e) { if (/계층|상위가 될 수 없|하위 작업/.test(String(e.message))) throw e; }

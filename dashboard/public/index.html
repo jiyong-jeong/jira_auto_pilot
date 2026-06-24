@@ -301,7 +301,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
             </select>
           </label>
           <Field label="또는 상위 키 직접 입력 (우선 적용)" value={newCard.parentInput} onChange={(v) => setNewCard({ ...newCard, parentInput: v })} placeholder="예: EKYB-123"
-            info="상위는 자식보다 한 단계 위: 에픽 > 작업/스토리 > 하위작업. 작업 하위에 두려면 이슈 타입을 '하위 작업'으로." />
+            info="상위는 자식보다 한 단계 위: 에픽 > 작업/스토리/버그 > 하위작업(Subtask). 버그·작업·스토리 하위에 두려면 이슈 타입을 'Subtask(하위 작업)'으로 선택. 작업/스토리를 두려면 상위는 에픽." />
         </div>
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
