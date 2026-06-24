@@ -218,6 +218,10 @@ else
   echo ">> [${ISSUE_KEY}] [BUILD] 답변 반영 + 개발 + PR"
   PROMPT="당신은 Jira 이슈 ${ISSUE_KEY} 를 ${REPO_NAME} 코드베이스에서 구현합니다. 작업 디렉토리는 현재 디렉토리입니다.
 
+[매우 중요] 이 작업은 헤드리스 1회 실행입니다. 작업을 '백그라운드로 미루거나' '나중에 알림을 받겠다'는 식으로 끝내지 마세요.
+테스트/빌드/커밋/푸시/PR/상태전환을 모두 '이 턴 안에서 동기적으로' 끝까지 수행한 뒤 종료하세요(오래 걸려도 끝까지 대기).
+PR 을 실제로 생성하지 못했다면 절대 완료로 간주하지 말고, 사유를 출력하고 비정상 종료하세요(다음 주기에 재시도됩니다).
+
 1. Jira 이슈 ${ISSUE_KEY} 의 설명과 '모든 코멘트'(특히 담당자 ${ASSIGNEE_NAME} 의 답변), 그리고 라벨을 읽으세요.
 2. build 진입 조건은 다음 '둘 다' 충족입니다. 둘 중 하나라도 없으면 어떤 코드 변경/커밋/PR도 하지 말고
    정확히 'SKIP: awaiting answers' 한 줄만 출력하고 종료하세요. (다음 주기에 다시 시도됩니다.)
@@ -277,15 +281,26 @@ else
 fi
 set -e
 
+# 결과 분류: PR/브랜치 추출 + 미완료 감지
+PR_URL=""; BRANCH_OUT=""; RESULT="failed"
 if [[ "${CLAUDE_OK}" -eq 0 ]]; then
-  rm -f "${FAIL_FILE}"
-  echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE})"
-  # 결과 분류 + PR/브랜치 추출해 이력 기록
   PR_URL="$(grep -oE 'https://github\.com/[^ )]+/pull/[0-9]+' "${CLAUDE_OUT}" | head -n1 || true)"
   BRANCH_OUT="$(grep -oE "feature/${ISSUE_KEY}[A-Za-z0-9._/-]*" "${CLAUDE_OUT}" | head -n1 || true)"
-  if grep -q 'SKIP:' "${CLAUDE_OUT}"; then RESULT="skip"; else RESULT="success"; fi
+  if grep -q 'SKIP:' "${CLAUDE_OUT}"; then
+    RESULT="skip"
+  elif [[ "${PHASE}" == "build" && -z "${PR_URL}" ]]; then
+    # build 인데 PR URL 이 없으면 미완료(예: claude 가 작업을 백그라운드로 미루고 종료) → 실패로 처리, 다음 주기 재시도
+    RESULT="incomplete"
+    echo ">> [${ISSUE_KEY}] build 가 PR 없이 종료됨 → 미완료(재시도 대상)" >&2
+  else
+    RESULT="success"
+  fi
+fi
+
+if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" ]]; then
+  rm -f "${FAIL_FILE}"
+  echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, result=${RESULT})"
   record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
-  # 처리 완료 시 Slack 알림 (스킵은 알리지 않음)
   if [[ "${RESULT}" == "success" ]]; then
     MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
     [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
@@ -295,8 +310,8 @@ if [[ "${CLAUDE_OK}" -eq 0 ]]; then
 else
   count=$(( $(cat "${FAIL_FILE}" 2>/dev/null || echo 0) + 1 ))
   echo "${count}" > "${FAIL_FILE}"
-  echo ">> [${ISSUE_KEY}] 실패 (phase=${PHASE}, ${count}/${MAX_RETRIES})" >&2
-  record_history "failed" "" ""
+  echo ">> [${ISSUE_KEY}] ${RESULT} (phase=${PHASE}, ${count}/${MAX_RETRIES})" >&2
+  record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
   if (( count >= MAX_RETRIES )); then
     echo ">> [${ISSUE_KEY}] 최대 재시도(${MAX_RETRIES}) 초과 → '${FAILED_LABEL}' 라벨 + 실패 코멘트" >&2
     ERR_TAIL="$(tail -n 25 "${CLAUDE_OUT}" 2>/dev/null || true)"
