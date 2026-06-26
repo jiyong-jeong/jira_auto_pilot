@@ -417,6 +417,26 @@ app.post("/api/cards/:key/run", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// 기존 카드의 대상 repo 라벨(repo_<name>) 설정 — 프로젝트 repo 목록과 교집합만 반영
+app.post("/api/cards/:key/repos", async (req, res) => {
+  const key = req.params.key;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  try {
+    const { cfg, cred } = resolveProject(req);
+    const projNames = normalizeRepos(cfg).map((r) => r.name);
+    const want = (Array.isArray(req.body && req.body.repos) ? req.body.repos : []).filter((n) => projNames.includes(n));
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
+    const cur = (issue.fields && issue.fields.labels) || [];
+    const curRepo = cur.filter((l) => l.indexOf(REPO_LABEL_PREFIX) === 0);
+    const desired = want.map((n) => REPO_LABEL_PREFIX + n);
+    const ops = [];
+    desired.filter((l) => !curRepo.includes(l)).forEach((l) => ops.push({ add: l }));
+    curRepo.filter((l) => !desired.includes(l)).forEach((l) => ops.push({ remove: l }));
+    if (ops.length) await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: ops } }, cfg, cred);
+    res.json({ ok: true, repos: want });
+  } catch (e) { fail(res, e); }
+});
+
 // 카드의 PR(들)을 rebase merge 하고, 1개 이상 병합되면 카드를 완료 상태로 전환
 app.post("/api/cards/:key/merge", async (req, res) => {
   const key = req.params.key;
