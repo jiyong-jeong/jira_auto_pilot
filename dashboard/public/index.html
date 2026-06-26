@@ -263,9 +263,13 @@ function ProjectCard({ proj, onDeleted, flash }) {
     if (r.ok) { setReworkMemo(""); showClaudeLog(key, "build"); }
   };
   const setCardRepos = async (key, repos) => {
+    // 낙관적 갱신: Jira JQL 검색 인덱싱 지연으로 재조회가 늦으므로 로컬 라벨을 즉시 반영
+    setCards((cs) => cs.map((c) => c.key === key
+      ? { ...c, labels: [...(c.labels || []).filter((l) => l.indexOf("repo_") !== 0), ...repos.map((n) => "repo_" + n)] }
+      : c));
     const r = await api.post(`/api/cards/${key}/repos`, { repos, project: PID });
     flash(r.ok ? `${key} 대상 repo: ${repos.join(", ") || "(없음)"}` : (r.message || "실패"));
-    if (r.ok) loadCards();
+    if (!r.ok) loadCards();   // 실패 시 서버 상태로 되돌림
   };
   const mergeCard = async (key) => {
     if (!window.confirm(`${key} 의 PR(들)을 rebase merge 하고 카드를 완료 처리할까요?`)) return;
