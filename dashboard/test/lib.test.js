@@ -54,6 +54,17 @@ test("adfToText: 문단/제목/불릿/인용/멘션/줄바꿈", () => {
   assert.match(t, /@홍길동 님/);
 });
 
+test("adfToText: onMedia 콜백으로 media 노드 치환(이미지 인라인)", () => {
+  const doc = { type: "doc", content: [
+    { type: "paragraph", content: [{ type: "text", text: "앞" }] },
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: "uuid-1", alt: "shot.png" } }] },
+    { type: "paragraph", content: [{ type: "text", text: "뒤" }] },
+  ] };
+  assert.match(lib.adfToText(doc), /앞\n뒤/);                   // 콜백 없으면 media 무시(기존 동작)
+  const t = lib.adfToText(doc, (a) => `<<${a.alt}>>`);
+  assert.match(t, /<<shot\.png>>/);                              // 콜백으로 alt(=첨부 파일명) 치환
+});
+
 test("toADF: 평문 → 문단 배열", () => {
   const adf = lib.toADF("a\n\nb");
   assert.equal(adf.type, "doc");

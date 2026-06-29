@@ -102,6 +102,21 @@ const resultBadge = {
   "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
 };
 
+// ADF 세그먼트(text/image) 렌더 — 카드 이미지는 백엔드 프록시(/api/.../attachment/:id)로 표시
+function RichBody({ segments, fallback, cardKey, pid }) {
+  if (!segments || !segments.length) return <span className="whitespace-pre-wrap">{fallback || "(없음)"}</span>;
+  const src = (id) => `/api/jira/issue/${cardKey}/attachment/${id}?project=${encodeURIComponent(pid)}`;
+  return (
+    <React.Fragment>
+      {segments.map((s, i) => s.type === "image"
+        ? <a key={i} href={src(s.id)} target="_blank" rel="noreferrer" title={s.filename}>
+            <img src={src(s.id)} alt={s.filename} loading="lazy" className="my-1 max-w-full max-h-80 rounded border border-slate-600 block" />
+          </a>
+        : <span key={i} className="whitespace-pre-wrap">{s.text}</span>)}
+    </React.Fragment>
+  );
+}
+
 // 실행에 필요한 설치 요소·리소스 안내 모달
 function InfoModal({ onClose }) {
   const H = ({ children }) => <h3 className="text-sm font-semibold text-indigo-300 mt-4 mb-1">{children}</h3>;
@@ -534,13 +549,13 @@ function ProjectCard({ proj, onDeleted, flash }) {
                               <Btn color="green" onClick={() => mergeCard(c.key)}>PR 병합</Btn>
                             </div>
                             <div className="text-xs text-slate-400 mb-1">원문 설명</div>
-                            <pre className="bg-black/40 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 mb-4 max-h-60 overflow-auto">{detail.description || "(설명 없음)"}</pre>
+                            <div className="bg-black/40 border border-slate-700 rounded p-3 text-xs text-slate-200 mb-4 max-h-72 overflow-auto"><RichBody segments={detail.descriptionSegments} fallback={detail.description || "(설명 없음)"} cardKey={detail.key} pid={PID} /></div>
                             <div className="text-xs text-slate-400 mb-1">코멘트 ({detail.comments.length})</div>
                             <div className="space-y-2 mb-4 max-h-72 overflow-auto">
                               {detail.comments.length === 0 ? <p className="text-slate-500 text-xs">코멘트 없음</p> : detail.comments.map((cm, i) => (
                                 <div key={i} className="bg-slate-800/60 border border-slate-700 rounded p-2">
                                   <div className="flex items-center justify-between mb-1"><span className="text-[11px] text-slate-400">{cm.author} · {cm.created ? new Date(cm.created).toLocaleString() : ""}</span><button onClick={() => setReplyTarget({ author: cm.author, accountId: cm.accountId, snippet: (cm.body || "").slice(0, 280) })} className="text-[11px] text-indigo-400 hover:text-indigo-300">↳ 답글</button></div>
-                                  <div className="text-xs whitespace-pre-wrap text-slate-200">{cm.body}</div>
+                                  <div className="text-xs text-slate-200"><RichBody segments={cm.bodySegments} fallback={cm.body} cardKey={detail.key} pid={PID} /></div>
                                 </div>
                               ))}
                             </div>

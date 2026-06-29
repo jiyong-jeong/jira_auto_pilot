@@ -622,23 +622,62 @@ app.get("/api/claude-log/:key/:phase", (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// ADF → 세그먼트 배열(text/image). 이미지 노드는 첨부(filename=media.alt)와 매칭해 프록시로 표시.
+const NUL = String.fromCharCode(0); // 일반 텍스트와 충돌하지 않는 구분자
+function adfSegments(adf, imgByName) {
+  const text = adfToText(adf, (a) => NUL + (a.alt || a.id || "") + NUL);
+  const segs = [];
+  const re = new RegExp(NUL + "(.*?)" + NUL, "g");
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) segs.push({ type: "text", text: text.slice(last, m.index) });
+    const name = m[1], att = imgByName[name];
+    if (att) segs.push({ type: "image", id: att.id, filename: name });
+    else segs.push({ type: "text", text: `[이미지: ${name || "?"}]` });
+    last = re.lastIndex;
+  }
+  if (last < text.length) segs.push({ type: "text", text: text.slice(last) });
+  return segs;
+}
+
 // 카드 상세
 app.get("/api/jira/issue/:key", async (req, res) => {
   try {
     const { cfg, cred } = resolveProject(req);
     const key = req.params.key;
-    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels`, null, cfg, cred);
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels,attachment`, null, cfg, cred);
     const cs = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/comment?maxResults=50`, null, cfg, cred);
-    const comments = (cs.comments || []).map((c) => ({ id: c.id, author: (c.author && c.author.displayName) || "?", accountId: c.author && c.author.accountId, created: c.created, body: adfToText(c.body) }));
+    const imgByName = {};
+    ((issue.fields && issue.fields.attachment) || []).forEach((a) => {
+      if (String(a.mimeType || "").startsWith("image/")) imgByName[a.filename] = { id: a.id, mimeType: a.mimeType };
+    });
+    const comments = (cs.comments || []).map((c) => ({ id: c.id, author: (c.author && c.author.displayName) || "?", accountId: c.author && c.author.accountId, created: c.created, body: adfToText(c.body), bodySegments: adfSegments(c.body, imgByName) }));
     res.json({
       ok: true, key,
       summary: issue.fields && issue.fields.summary,
       status: issue.fields && issue.fields.status && issue.fields.status.name,
       labels: (issue.fields && issue.fields.labels) || [],
       description: adfToText(issue.fields && issue.fields.description),
+      descriptionSegments: adfSegments(issue.fields && issue.fields.description, imgByName),
       comments, url: `https://${cfg.jiraSite}/browse/${key}`,
     });
   } catch (e) { fail(res, e); }
+});
+
+// 카드 첨부 이미지 프록시: 브라우저는 Jira 인증을 못 하므로 백엔드가 Basic auth 로 받아 스트리밍한다.
+app.get("/api/jira/issue/:key/attachment/:id", async (req, res) => {
+  try {
+    const { cfg, cred } = resolveProject(req);
+    if (!/^\d+$/.test(req.params.id)) return res.status(400).end();
+    const url = `https://${cfg.jiraSite}/rest/api/3/attachment/content/${req.params.id}`;
+    let up = await fetch(url, { headers: { Authorization: `Basic ${jiraAuth(cred)}` }, redirect: "manual" });
+    const loc = up.headers.get("location");
+    if (up.status >= 300 && up.status < 400 && loc) up = await fetch(loc); // 서명 URL(인증 헤더 미전달)
+    if (!up.ok) return res.status(up.status).end();
+    res.setHeader("Content-Type", up.headers.get("content-type") || "application/octet-stream");
+    res.setHeader("Cache-Control", "private, max-age=300");
+    res.end(Buffer.from(await up.arrayBuffer()));
+  } catch (e) { res.status(502).end(); }
 });
 
 // 답변 코멘트

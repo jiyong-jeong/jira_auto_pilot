@@ -79,14 +79,16 @@ function detectJql(mode, cfg) {
   return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}" AND (labels != "${prLabel}" OR labels IS EMPTY)${failed}${proj}`;
 }
 
-function adfToText(node) {
+// onMedia(attrs) 를 주면 media/mediaInline 노드를 그 반환값으로 치환(이미지 인라인 표시용). 없으면 무시(기존 동작).
+function adfToText(node, onMedia) {
   if (!node) return "";
-  if (Array.isArray(node)) return node.map(adfToText).join("");
+  if (Array.isArray(node)) return node.map((n) => adfToText(n, onMedia)).join("");
   if (node.type === "text") return node.text || "";
   if (node.type === "hardBreak") return "\n";
   if (node.type === "mention") return "@" + (node.attrs && node.attrs.text ? node.attrs.text.replace(/^@/, "") : "");
   if (node.type === "emoji") return (node.attrs && (node.attrs.shortName || node.attrs.text)) || "";
-  const inner = node.content ? adfToText(node.content) : "";
+  if ((node.type === "media" || node.type === "mediaInline") && onMedia) return onMedia(node.attrs || {});
+  const inner = node.content ? adfToText(node.content, onMedia) : "";
   if (node.type === "listItem") return "• " + inner.replace(/\n+$/, "") + "\n";
   if (node.type === "blockquote") { const t = inner.replace(/\n+$/, ""); return t.split("\n").map((l) => "> " + l).join("\n") + "\n"; }
   if (["paragraph", "heading", "codeBlock", "rule", "panel"].indexOf(node.type) !== -1) return inner + "\n";
