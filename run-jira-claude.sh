@@ -119,9 +119,11 @@ if ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "SKIP: [${ISSUE_KEY}] 이미 처리 중(lock) — 동시 실행 방지로 종료"
   exit 0
 fi
-# 처리 중 단계 표시용: 현재 phase 를 락 옆 파일에 기록(대시보드가 '처리 중' 표시에 사용)
+# 처리 중 단계 표시용: 현재 phase 와 이 스크립트 PID 를 락 옆 파일에 기록
+# (대시보드가 '처리 중' 표시 + 카드 단위 '중지'(프로세스 트리 종료)에 사용)
 printf '%s' "${PHASE}" > "${LOCK_DIR}.phase" 2>/dev/null || true
-trap 'rmdir "${LOCK_DIR}" 2>/dev/null || true; rm -f "${LOCK_DIR}.phase" 2>/dev/null || true' EXIT
+printf '%s' "$$" > "${LOCK_DIR}.pid" 2>/dev/null || true
+trap 'rmdir "${LOCK_DIR}" 2>/dev/null || true; rm -f "${LOCK_DIR}.phase" "${LOCK_DIR}.pid" 2>/dev/null || true' EXIT
 
 # ===== 대상 repo 목록 파싱 (CARD_REPOS: name\turl\tbaseBranch\tenvSrc\tenvDest; 없으면 REPO_URL 단일) =====
 declare -a R_NAME R_URL R_BRANCH R_ENVSRC R_ENVDEST

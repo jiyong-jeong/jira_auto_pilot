@@ -7,7 +7,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { spawn, execFile } = require("child_process");
+const { spawn, execFile, execFileSync } = require("child_process");
 
 const app = express();
 app.use(express.json({ limit: "25mb" })); // 이미지(base64) 첨부 페이로드 허용
@@ -111,6 +111,17 @@ function readPid(type) {
 }
 function readVer(type) { try { return fs.readFileSync(verFile(type), "utf8").trim(); } catch { return null; } }
 function isAlive(pid) { if (!pid) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
+// 카드 단위 중지용: pgrep -P 로 자식 PID 를 재귀 수집(macOS 에 /proc 없음). pid 자신은 미포함.
+function descendantPids(pid) {
+  const acc = [];
+  const visit = (p) => {
+    let kids = [];
+    try { kids = execFileSync("pgrep", ["-P", String(p)], { encoding: "utf8" }).split(/\s+/).filter(Boolean).map(Number); } catch { kids = []; }
+    for (const k of kids) { if (!acc.includes(k)) { acc.push(k); visit(k); } }
+  };
+  visit(pid);
+  return acc;
+}
 function clearPid(type) { try { fs.unlinkSync(pidFile(type)); } catch {} try { fs.unlinkSync(verFile(type)); } catch {} }
 
 // 프로젝트별 env (run-jira-claude.sh 에 주입). id 미지정 시 첫 프로젝트.
@@ -402,6 +413,33 @@ app.post("/api/cards/:key/run", async (req, res) => {
       if (!posted.length) return res.json({ ok: false, message: "PR 코멘트 실패(열린 PR 없음/권한): " + (errors[0] || "") });
     }
     res.json(runCard(key, phase, new Date().toISOString(), id, reposLines, rework));
+  } catch (e) { fail(res, e); }
+});
+
+// 처리 중인 카드의 claude 작업 중지 — 락 PID 의 프로세스 트리(run-jira-claude.sh→claude→도구)를 종료.
+// (루프/run-cycle/다른 카드는 건드리지 않음)
+app.post("/api/cards/:key/stop", (req, res) => {
+  const key = req.params.key;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  try {
+    const { cfg } = resolveProject(req);
+    const stateDir = path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state");
+    const lockDir = path.join(stateDir, `${key}.lock`);
+    let pid = null;
+    try { pid = parseInt(fs.readFileSync(`${lockDir}.pid`, "utf8").trim(), 10); } catch {}
+    if (!pid || !isAlive(pid)) return res.json({ ok: false, message: "처리 중인 작업이 없습니다(이미 종료됨)." });
+    let phase = ""; try { phase = fs.readFileSync(`${lockDir}.phase`, "utf8").trim(); } catch {}
+    const tree = [...descendantPids(pid), pid]; // 자식 먼저, 루트(bash) 마지막
+    for (const p of tree) { try { process.kill(p, "SIGTERM"); } catch {} }
+    // 4초 후: 잔존 프로세스는 SIGKILL, 그리고 락은 무조건 정리(SIGKILL 은 trap 미실행 → 스테일 락 방지)
+    setTimeout(() => {
+      for (const p of [pid, ...descendantPids(pid)].filter(isAlive)) { try { process.kill(p, "SIGKILL"); } catch {} }
+      try { fs.rmSync(lockDir, { recursive: true, force: true }); } catch {}
+      try { fs.unlinkSync(`${lockDir}.phase`); } catch {}
+      try { fs.unlinkSync(`${lockDir}.pid`); } catch {}
+    }, 4000);
+    try { fs.appendFileSync(HISTORY_PATH, JSON.stringify({ ts: new Date().toISOString().replace(/\.\d{3}Z$/, "Z"), project: cfg.id || "", key, phase, result: "stopped", pr: "", branch: "" }) + "\n"); } catch {}
+    res.json({ ok: true, pid, killed: tree.length, message: `중지 요청됨 (pid ${pid}${tree.length > 1 ? ` 외 ${tree.length - 1}개` : ""})` });
   } catch (e) { fail(res, e); }
 });
 

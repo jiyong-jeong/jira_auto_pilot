@@ -272,6 +272,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
     else flash(r.message || "등록 실패");
   };
   const runCardNow = async (key, phase) => { const r = await api.post(`/api/cards/${key}/run`, { phase, project: PID }); flash(r.ok ? `${key} ${phase} 즉시 실행 — Claude 실행 로그 확인` : (r.message || "실패")); if (r.ok) showClaudeLog(key, phase); };
+  const stopCard = async (key) => { const r = await api.post(`/api/cards/${key}/stop`, { project: PID }); flash(r.ok ? `${key} ${r.message}` : (r.message || "중지 실패")); loadCards(); };
   const reworkCard = async (key) => {
     const r = await api.post(`/api/cards/${key}/run`, { phase: "build", rework: true, memo: reworkMemo, project: PID });
     flash(r.ok ? `${key} 리뷰 반영 시작 — 기존 PR 갱신(로그 확인)` : (r.message || "실패"));
@@ -502,6 +503,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
                               <span className="text-xs text-slate-400">이 카드만 즉시 실행:</span>
                               <Btn color="indigo" onClick={() => runCardNow(c.key, "plan")}>plan</Btn>
                               <Btn color="indigo" onClick={() => runCardNow(c.key, "build")}>build</Btn>
+                              {c.stage === "processing" && <Btn color="red" onClick={() => stopCard(c.key)}>■ 중지({c.proc})</Btn>}
                               <span className="text-xs text-slate-400 ml-3">Claude 실행 로그:</span>
                               <Btn color="slate" onClick={() => showClaudeLog(c.key, "plan")}>plan</Btn>
                               <Btn color="slate" onClick={() => showClaudeLog(c.key, "build")}>build</Btn>
