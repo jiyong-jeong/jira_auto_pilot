@@ -603,6 +603,7 @@ function App() {
   const [status, setStatus] = useState({ plan: { running: false }, build: { running: false } });
   const [logs, setLogs] = useState({ plan: "", build: "" });
   const [history, setHistory] = useState([]);
+  const [histPage, setHistPage] = useState(0);
   const [toast, setToast] = useState("");
   const [infoOpen, setInfoOpen] = useState(false);
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2500); };
@@ -664,28 +665,51 @@ function App() {
       {projects.length === 0 && <p className="text-slate-500 text-sm mb-5">프로젝트가 없습니다. "+ 프로젝트 추가"로 시작하세요.</p>}
       {projects.map((p) => <ProjectCard key={p.id} proj={p} flash={flash} onDeleted={() => { flash("프로젝트 삭제됨"); loadProjects(); }} />)}
 
-      {/* 처리 이력 (전역) */}
+      {/* 처리 이력 (전역) — 페이지네이션 */}
       <Section title="처리 이력 (전 프로젝트)" collapsible defaultOpen right={<Btn color="slate" onClick={loadHistory}>새로고침</Btn>}>
-        {history.length === 0 ? <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다.</p> : (
-          <table className="w-full text-sm">
-            <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">시각</th><th>프로젝트</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
-            <tbody>
-              {history.map((h, i) => {
-                const [label, cls] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
-                return (
-                  <tr key={i} className="border-b border-slate-800">
-                    <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
-                    <td className="text-slate-400">{h.project || "-"}</td>
-                    <td className="text-slate-200">{h.key}</td><td className="text-slate-300">{h.phase}</td>
-                    <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
-                    <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
-                    <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        )}
+        {history.length === 0 ? <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다.</p> : (() => {
+          const PAGE_SIZE = 10;
+          const totalPages = Math.max(1, Math.ceil(history.length / PAGE_SIZE));
+          const page = Math.min(histPage, totalPages - 1);   // 이력이 줄어도 안전하게 클램프
+          const start = page * PAGE_SIZE;
+          const pageRows = history.slice(start, start + PAGE_SIZE);
+          const PgBtn = ({ disabled, onClick, children }) => (
+            <button onClick={onClick} disabled={disabled}
+              className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:border-indigo-500/50 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition">{children}</button>
+          );
+          return (
+            <React.Fragment>
+              <table className="w-full text-sm">
+                <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">시각</th><th>프로젝트</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
+                <tbody>
+                  {pageRows.map((h, i) => {
+                    const [label, cls] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
+                    return (
+                      <tr key={`${h.ts}-${h.key}-${h.phase}-${start + i}`} className="border-b border-slate-800">
+                        <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
+                        <td className="text-slate-400">{h.project || "-"}</td>
+                        <td className="text-slate-200">{h.key}</td><td className="text-slate-300">{h.phase}</td>
+                        <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                        <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
+                        <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              <div className="flex items-center justify-between mt-3 text-xs text-slate-400">
+                <span>총 {history.length}건 · {start + 1}–{Math.min(start + PAGE_SIZE, history.length)}</span>
+                <div className="flex items-center gap-1">
+                  <PgBtn disabled={page <= 0} onClick={() => setHistPage(0)}>« 처음</PgBtn>
+                  <PgBtn disabled={page <= 0} onClick={() => setHistPage(page - 1)}>‹ 이전</PgBtn>
+                  <span className="px-2 text-slate-300">{page + 1} / {totalPages}</span>
+                  <PgBtn disabled={page >= totalPages - 1} onClick={() => setHistPage(page + 1)}>다음 ›</PgBtn>
+                  <PgBtn disabled={page >= totalPages - 1} onClick={() => setHistPage(totalPages - 1)}>마지막 »</PgBtn>
+                </div>
+              </div>
+            </React.Fragment>
+          );
+        })()}
       </Section>
 
       {/* 실시간 로그 (전역) */}
