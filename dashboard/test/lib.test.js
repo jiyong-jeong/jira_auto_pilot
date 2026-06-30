@@ -110,6 +110,33 @@ test("toADF: 평문 → 문단 배열", () => {
   assert.deepEqual(adf.content[1].content, []); // 빈 줄
 });
 
+test("mdInline: 굵게/코드/링크/맨URL", () => {
+  const b = lib.mdInline("a **bold** b");
+  assert.deepEqual(b[1], { type: "text", text: "bold", marks: [{ type: "strong" }] });
+  const c = lib.mdInline("`go test`");
+  assert.deepEqual(c[0].marks, [{ type: "code" }]);
+  const l = lib.mdInline("see [PR](https://x/pull/1) end");
+  assert.equal(l[1].text, "PR");
+  assert.equal(l[1].marks[0].attrs.href, "https://x/pull/1");
+  const u = lib.mdInline("https://github.com/o/r/pull/9");
+  assert.equal(u[0].marks[0].type, "link");
+});
+
+test("mdToADF: 제목/불릿/표/구분선 → ADF, 이미지 왕복 없음", () => {
+  const md = "### 변경 요약\n\n* 첫째 **항목**\n* 둘째\n\n---\n\n| repo | PR |\n| --- | --- |\n| kyb-api | https://x/pull/1 |";
+  const adf = lib.mdToADF(md);
+  const types = adf.content.map((n) => n.type);
+  assert.ok(types.includes("heading"));
+  assert.ok(types.includes("bulletList"));
+  assert.ok(types.includes("rule"));
+  const bl = adf.content.find((n) => n.type === "bulletList");
+  assert.equal(bl.content.length, 2);                       // 불릿 2개
+  assert.equal(bl.content[0].content[0].type, "paragraph");
+  const tableRow = adf.content.find((n) => n.type === "paragraph" && /kyb-api/.test(JSON.stringify(n)));
+  assert.ok(/·/.test(JSON.stringify(tableRow)));            // 표 행 → '·' 연결 문단(강등)
+  assert.equal(adf.content.find((n) => n.type === "heading").attrs.level, 3);
+});
+
 test("buildReplyADF: 인용 + 멘션 + 본문", () => {
   const adf = lib.buildReplyADF("답변1\n답변2", { author: "홍길동", accountId: "acc1", snippet: "원문" });
   assert.equal(adf.content[0].type, "blockquote");

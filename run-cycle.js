@@ -117,6 +117,10 @@ function projectEnv(p, cred) {
   if (cred && cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
   if (cred && cred.githubToken) { env.GH_TOKEN = cred.githubToken; env.GITHUB_TOKEN = cred.githubToken; }
   if (cred && cred.slackWebhookUrl) env.SLACK_WEBHOOK_URL = cred.slackWebhookUrl;
+  // 완료 내역을 설명 ADF 에 직접 append(이미지 보존)하기 위한 Jira REST 자격증명
+  env.JIRA_SITE = cfg.jiraSite || "";
+  if (cred && cred.atlassianEmail) env.ATLASSIAN_EMAIL = cred.atlassianEmail;
+  if (cred && cred.atlassianToken) env.ATLASSIAN_TOKEN = cred.atlassianToken;
   return { cfg, env };
 }
 
@@ -148,6 +152,9 @@ async function runCard(key, env, cfg, cred) {
     const imgs = await downloadCardImages(cfg, cred, key);   // 카드 이미지 → Claude Read 인식용
     if (imgs.length) { e.CARD_IMAGES = imgs.join("\n"); log(`[${key}] 카드 이미지 ${imgs.length}장 첨부(추론 인식)`); }
   } catch { /* 이미지 없이 진행 */ }
+  // 완료 내역 요약 저장 경로(claude 가 여기에 markdown 작성 → 스크립트가 설명 ADF 에 안전 append)
+  const stateBase = cfg.cloneBase || path.join(cfg.workDir || SELF, "repos");
+  e.SUMMARY_FILE = path.join(stateBase, ".state", `${key}.summary.md`);
   return new Promise((resolve) => {
     const c = spawn("bash", [path.join(SELF, "run-jira-claude.sh"), key, phase], { env: e, stdio: "inherit" });
     c.on("close", () => resolve());

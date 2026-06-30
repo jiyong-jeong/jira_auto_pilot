@@ -134,6 +134,57 @@ function toADF(text) {
   return { type: "doc", version: 1, content: String(text).split("\n").map((ln) => ({ type: "paragraph", content: ln ? [{ type: "text", text: ln }] : [] })) };
 }
 
+// 인라인 마크다운(**굵게**, `코드`, [텍스트](url)·맨 URL) → ADF inline 노드 배열
+function mdInline(s) {
+  const nodes = [];
+  const re = /(\*\*([^*]+)\*\*)|(`([^`]+)`)|(\[([^\]]+)\]\((https?:\/\/[^\s)]+)\))|(https?:\/\/[^\s)]+)/g;
+  let last = 0, m;
+  const pushText = (t) => { if (t) nodes.push({ type: "text", text: t }); };
+  while ((m = re.exec(s))) {
+    pushText(s.slice(last, m.index));
+    if (m[2] !== undefined) nodes.push({ type: "text", text: m[2], marks: [{ type: "strong" }] });
+    else if (m[4] !== undefined) nodes.push({ type: "text", text: m[4], marks: [{ type: "code" }] });
+    else if (m[5] !== undefined) nodes.push({ type: "text", text: m[6], marks: [{ type: "link", attrs: { href: m[7] } }] });
+    else if (m[8] !== undefined) nodes.push({ type: "text", text: m[8], marks: [{ type: "link", attrs: { href: m[8] } }] });
+    last = re.lastIndex;
+  }
+  pushText(s.slice(last));
+  return nodes.length ? nodes : [{ type: "text", text: s }];
+}
+
+// 요약 마크다운 → ADF 문서(제목/불릿/표/구분선/문단). FE prefill 친화적 서식 보존용.
+function mdToADF(md) {
+  const lines = String(md == null ? "" : md).replace(/\r\n/g, "\n").split("\n");
+  const content = [];
+  const isBullet = (l) => /^\s*[*\-]\s+/.test(l);
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i], t = line.trim();
+    if (t === "") { i++; continue; }                                   // 빈 줄 = 문단 경계
+    if (/^(-{3,}|\*{3,})$/.test(t)) { content.push({ type: "rule" }); i++; continue; }
+    const hx = t.match(/^(#{1,6})\s+(.*)$/);
+    if (hx) { content.push({ type: "heading", attrs: { level: hx[1].length }, content: mdInline(hx[2]) }); i++; continue; }
+    if (isBullet(line)) {
+      const items = [];
+      while (i < lines.length && isBullet(lines[i])) {
+        items.push({ type: "listItem", content: [{ type: "paragraph", content: mdInline(lines[i].replace(/^\s*[*\-]\s+/, "")) }] });
+        i++;
+      }
+      content.push({ type: "bulletList", content: items });
+      continue;
+    }
+    if (/^\s*\|.*\|\s*$/.test(line)) {                                 // 표: 헤더/구분선 행 스킵, 나머지는 '·' 로 연결한 문단(우아한 강등)
+      if (/^\s*\|[\s:|-]+\|\s*$/.test(line)) { i++; continue; }
+      const cells = t.replace(/^\||\|$/g, "").split("|").map((c) => c.trim()).filter(Boolean);
+      content.push({ type: "paragraph", content: mdInline(cells.join(" · ")) });
+      i++; continue;
+    }
+    content.push({ type: "paragraph", content: mdInline(t) });
+    i++;
+  }
+  return { type: "doc", version: 1, content };
+}
+
 function buildReplyADF(body, replyTo) {
   const content = [];
   if (replyTo && replyTo.snippet) {
@@ -215,7 +266,7 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
 
 module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
-  adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, createStore,
+  adfToText, adfSegments, toADF, mdInline, mdToADF, buildReplyADF, maskCreds, applyCreds, createStore,
   REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
   loadOrCreateEnvKey, encryptEnv, decryptEnv,
 };

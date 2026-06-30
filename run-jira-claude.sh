@@ -64,6 +64,9 @@ if [[ "${PHASE}" != "plan" && "${PHASE}" != "build" ]]; then
   exit 1
 fi
 
+# claude 가 완료 요약(md)을 쓰는 파일 → 스크립트가 설명 ADF 에 안전 append(이미지 보존)
+SUMMARY_FILE="${SUMMARY_FILE:-${CLONE_BASE}/.state/${ISSUE_KEY}.summary.md}"
+
 # ===== 트리거 방식별 프롬프트 조각 =====
 if [[ "${TRIGGER_MODE}" == "text" ]]; then
   TRIGGER_DESC="설명/내부 컨텐츠에 '${TRIGGER_TEXT}' 라는 텍스트가 포함되어 있는지"
@@ -71,8 +74,9 @@ if [[ "${TRIGGER_MODE}" == "text" ]]; then
       요약에는 변경 내용 요약, PR URL, 브랜치명, 완료 일시를 포함하세요. ('${TRIGGER_TEXT}' 텍스트 자체는 유지)"
 else
   TRIGGER_DESC="'${TRIGGER_LABEL}' 라벨이 붙어 있는지"
-  SUMMARY_INSTR="완료 요약을 이슈 '설명(description)' 의 '맨 아래'에만 추가하세요. (코멘트로는 남기지 마세요 — 중복 방지)
-      기존 설명 내용은 절대 지우지 말고 그대로 보존한 뒤, 마지막에 '---' 구분선과 '## 완료 내역' 제목을 두고 그 아래에 요약을 추가하세요.
+  SUMMARY_INSTR="완료 요약을 markdown 으로 작성해 파일 '${SUMMARY_FILE}' 에 저장만 하세요(Write 도구 사용).
+      ⚠️ Jira 설명(description)은 절대 직접 수정하지 마세요 — 시스템이 요약을 설명 맨 아래에 안전하게 추가하며, 설명을 직접 편집하면 본문의 붙여넣은 이미지가 깨집니다.
+      코멘트로도 남기지 마세요(중복 방지). '## 완료 내역' 제목은 시스템이 붙이므로 본문만 작성하세요.
       요약에는 변경 내용 요약, PR URL, 브랜치명, 완료 일시를 포함하세요."
 fi
 
@@ -272,6 +276,8 @@ STATE_DIR="${CLONE_BASE}/.state"
 FAIL_FILE="${STATE_DIR}/${ISSUE_KEY}.fail"
 CLAUDE_OUT="${STATE_DIR}/${ISSUE_KEY}.${PHASE}.out"
 mkdir -p "${STATE_DIR}"
+# 직전 실행의 완료 요약이 남아 잘못 append 되지 않도록 build 시작 전 정리
+[[ "${PHASE}" == "build" ]] && rm -f "${SUMMARY_FILE}"
 
 # claude 상세 실행 로그(도구 호출/메시지/결과)를 카드별로 영속 기록 → 대시보드에서 조회
 CLAUDE_LOG_DIR="${WORK_DIR}/claude-logs"
@@ -325,6 +331,15 @@ if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" || "${RESULT}" == "rewor
   rm -f "${FAIL_FILE}"
   echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, result=${RESULT})"
   record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
+  # 완료 요약을 설명 ADF '맨 아래'에 안전 append(기존 이미지/노드 보존). label 모드 + 요약 파일 존재 시.
+  if [[ "${PHASE}" == "build" && "${TRIGGER_MODE}" == "label" && -s "${SUMMARY_FILE}" ]]; then
+    if command -v node >/dev/null 2>&1 && [[ -n "${JIRA_SITE}" && -n "${ATLASSIAN_EMAIL:-}" && -n "${ATLASSIAN_TOKEN:-}" ]]; then
+      ISSUE_KEY="${ISSUE_KEY}" JIRA_SITE="${JIRA_SITE}" ATLASSIAN_EMAIL="${ATLASSIAN_EMAIL}" ATLASSIAN_TOKEN="${ATLASSIAN_TOKEN}" \
+        node "${SELF_DIR}/append-summary.js" "${SUMMARY_FILE}" || echo ">> [${ISSUE_KEY}] 완료 내역 설명 append 실패(요약 파일 보존)" >&2
+    else
+      echo ">> [${ISSUE_KEY}] Jira REST 자격증명 미설정 → 완료 내역 설명 append 생략(요약: ${SUMMARY_FILE})" >&2
+    fi
+  fi
   if [[ "${RESULT}" == "success" || "${RESULT}" == "rework" ]]; then
     [[ "${RESULT}" == "rework" ]] && MSG="🔧 [${ISSUE_KEY}] 리뷰 반영 완료(PR 갱신)" || MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
     [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
