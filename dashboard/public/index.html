@@ -108,11 +108,24 @@ function RichBody({ segments, fallback, cardKey, pid }) {
   const src = (id) => `/api/jira/issue/${cardKey}/attachment/${id}?project=${encodeURIComponent(pid)}`;
   return (
     <React.Fragment>
-      {segments.map((s, i) => s.type === "image"
-        ? <a key={i} href={src(s.id)} target="_blank" rel="noreferrer" title={s.filename}>
-            <img src={src(s.id)} alt={s.filename} loading="lazy" className="my-1 max-w-full max-h-80 rounded border border-slate-600 block" />
-          </a>
-        : <span key={i} className="whitespace-pre-wrap">{s.text}</span>)}
+      {segments.map((s, i) => {
+        if (s.type === "image") {
+          const url = s.url || src(s.id); // 외부 미디어는 원본 URL, 첨부는 백엔드 프록시
+          return (
+            <a key={i} href={url} target="_blank" rel="noreferrer" title={s.filename}>
+              <img src={url} alt={s.filename} loading="lazy" className="my-1 max-w-full max-h-80 rounded border border-slate-600 block" />
+            </a>
+          );
+        }
+        if (s.type === "unavailable") {
+          return (
+            <span key={i} className="my-1 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-300" title="첨부로 업로드되지 않은 인라인 이미지라 대시보드에서 가져올 수 없습니다. Jira에서 확인하세요.">
+              🖼 인라인 이미지(첨부 아님) — 표시 불가, Jira에서 확인
+            </span>
+          );
+        }
+        return <span key={i} className="whitespace-pre-wrap">{s.text}</span>;
+      })}
     </React.Fragment>
   );
 }

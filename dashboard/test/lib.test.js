@@ -65,6 +65,43 @@ test("adfToText: onMedia 콜백으로 media 노드 치환(이미지 인라인)",
   assert.match(t, /<<shot\.png>>/);                              // 콜백으로 alt(=첨부 파일명) 치환
 });
 
+test("adfSegments: alt=첨부파일명 매칭 → 프록시 이미지", () => {
+  const doc = { type: "doc", content: [
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: "uuid-1", alt: "shot.png" } }] },
+  ] };
+  const segs = lib.adfSegments(doc, { "shot.png": { id: "777" } }, [{ id: "777", filename: "shot.png" }]);
+  const img = segs.find((s) => s.type === "image");
+  assert.equal(img.id, "777");
+  assert.equal(img.filename, "shot.png");
+});
+
+test("adfSegments: alt 없는 미디어 → 순서 기반 첨부 폴백", () => {
+  const doc = { type: "doc", content: [
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: "m1" } }] },
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "file", id: "m2" } }] },
+  ] };
+  const images = [{ id: "100", filename: "a.png" }, { id: "200", filename: "b.png" }];
+  const segs = lib.adfSegments(doc, { "a.png": images[0], "b.png": images[1] }, images).filter((s) => s.type === "image");
+  assert.deepEqual(segs.map((s) => s.id), ["100", "200"]); // 노드 순서대로 첨부 연결
+});
+
+test("adfSegments: external blob 미디어(첨부 없음) → unavailable", () => {
+  const doc = { type: "doc", content: [
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "external", url: "blob:https://media.staging.atl-paas.net/?id=x" } }] },
+  ] };
+  const segs = lib.adfSegments(doc, {}, []);
+  assert.ok(segs.some((s) => s.type === "unavailable" && s.reason === "inline"));
+  assert.ok(!segs.some((s) => s.type === "text" && /이미지: \?/.test(s.text))); // [이미지: ?] 노출 안 함
+});
+
+test("adfSegments: external http(s) 미디어 → 원본 URL 이미지", () => {
+  const doc = { type: "doc", content: [
+    { type: "mediaSingle", content: [{ type: "media", attrs: { type: "external", url: "https://example.com/x.png", alt: "x" } }] },
+  ] };
+  const img = lib.adfSegments(doc, {}, []).find((s) => s.type === "image");
+  assert.equal(img.url, "https://example.com/x.png");
+});
+
 test("toADF: 평문 → 문단 배열", () => {
   const adf = lib.toADF("a\n\nb");
   assert.equal(adf.type, "doc");

@@ -58,7 +58,7 @@ const DEFAULT_CONFIG = {
 
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
-const { slugify, triggerClause, detectJql, adfToText, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
+const { slugify, triggerClause, detectJql, adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
 // repo 별 env 파일 경로(repo 전용 env 만 사용; 없으면 미복사 — run-jira 가 -f 로 확인)
 function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
 function repoEnvSrc(cfg, repoName) { return repoEnvFile(cfg, repoName); }
@@ -660,24 +660,6 @@ app.get("/api/claude-log/:key/:phase", (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-// ADF → 세그먼트 배열(text/image). 이미지 노드는 첨부(filename=media.alt)와 매칭해 프록시로 표시.
-const NUL = String.fromCharCode(0); // 일반 텍스트와 충돌하지 않는 구분자
-function adfSegments(adf, imgByName) {
-  const text = adfToText(adf, (a) => NUL + (a.alt || a.id || "") + NUL);
-  const segs = [];
-  const re = new RegExp(NUL + "(.*?)" + NUL, "g");
-  let last = 0, m;
-  while ((m = re.exec(text))) {
-    if (m.index > last) segs.push({ type: "text", text: text.slice(last, m.index) });
-    const name = m[1], att = imgByName[name];
-    if (att) segs.push({ type: "image", id: att.id, filename: name });
-    else segs.push({ type: "text", text: `[이미지: ${name || "?"}]` });
-    last = re.lastIndex;
-  }
-  if (last < text.length) segs.push({ type: "text", text: text.slice(last) });
-  return segs;
-}
-
 // 카드 상세
 app.get("/api/jira/issue/:key", async (req, res) => {
   try {
@@ -686,17 +668,22 @@ app.get("/api/jira/issue/:key", async (req, res) => {
     const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,description,status,labels,attachment`, null, cfg, cred);
     const cs = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/comment?maxResults=50`, null, cfg, cred);
     const imgByName = {};
+    const images = []; // 순서 보존 이미지 첨부 목록(alt 없는 미디어 노드 순서 매칭용)
     ((issue.fields && issue.fields.attachment) || []).forEach((a) => {
-      if (String(a.mimeType || "").startsWith("image/")) imgByName[a.filename] = { id: a.id, mimeType: a.mimeType };
+      if (String(a.mimeType || "").startsWith("image/")) {
+        const att = { id: a.id, filename: a.filename, mimeType: a.mimeType };
+        imgByName[a.filename] = att;
+        images.push(att);
+      }
     });
-    const comments = (cs.comments || []).map((c) => ({ id: c.id, author: (c.author && c.author.displayName) || "?", accountId: c.author && c.author.accountId, created: c.created, body: adfToText(c.body), bodySegments: adfSegments(c.body, imgByName) }));
+    const comments = (cs.comments || []).map((c) => ({ id: c.id, author: (c.author && c.author.displayName) || "?", accountId: c.author && c.author.accountId, created: c.created, body: adfToText(c.body), bodySegments: adfSegments(c.body, imgByName, images) }));
     res.json({
       ok: true, key,
       summary: issue.fields && issue.fields.summary,
       status: issue.fields && issue.fields.status && issue.fields.status.name,
       labels: (issue.fields && issue.fields.labels) || [],
       description: adfToText(issue.fields && issue.fields.description),
-      descriptionSegments: adfSegments(issue.fields && issue.fields.description, imgByName),
+      descriptionSegments: adfSegments(issue.fields && issue.fields.description, imgByName, images),
       comments, url: `https://${cfg.jiraSite}/browse/${key}`,
     });
   } catch (e) { fail(res, e); }

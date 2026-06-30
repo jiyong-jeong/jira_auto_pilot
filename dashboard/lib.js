@@ -95,6 +95,41 @@ function adfToText(node, onMedia) {
   return inner;
 }
 
+// ADF media 노드 → 세그먼트. imgByName(첨부 filename→{id}) + images(순서 보존 첨부 목록)로 매칭.
+// 반환: {type:"image", id|url, filename} | {type:"unavailable", reason, filename} | {type:"text", text}
+const SEG_NUL = String.fromCharCode(0); // 일반 텍스트와 충돌하지 않는 구분자
+function adfSegments(adf, imgByName, images) {
+  imgByName = imgByName || {};
+  images = images || [];
+  const medias = [];
+  const text = adfToText(adf, (a) => { medias.push(a || {}); return SEG_NUL + (medias.length - 1) + SEG_NUL; });
+  const used = new Set();
+  let cursor = 0; // 순서 기반 폴백용 다음 첨부 인덱스
+  const resolve = (a) => {
+    const alt = a.alt || "";
+    if (alt && imgByName[alt]) { used.add(imgByName[alt].id); return { type: "image", id: imgByName[alt].id, filename: alt }; }
+    // 외부 미디어: 공개 http(s) URL 은 직접 표시, blob: 등 서버가 못 가져오는 건 표시 불가 안내
+    if (a.type === "external" && a.url) {
+      if (/^https?:\/\//i.test(a.url)) return { type: "image", url: a.url, filename: alt };
+      return { type: "unavailable", reason: "inline", filename: alt };
+    }
+    // 순서 기반 폴백: alt 가 없어 매칭 실패한 첨부 이미지를 노드 순서대로 연결
+    while (cursor < images.length && used.has(images[cursor].id)) cursor++;
+    if (cursor < images.length) { const att = images[cursor++]; used.add(att.id); return { type: "image", id: att.id, filename: att.filename || alt }; }
+    return { type: "text", text: `[이미지: ${alt || "?"}]` };
+  };
+  const segs = [];
+  const re = new RegExp(SEG_NUL + "(\\d+)" + SEG_NUL, "g");
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    if (m.index > last) segs.push({ type: "text", text: text.slice(last, m.index) });
+    segs.push(resolve(medias[+m[1]]));
+    last = re.lastIndex;
+  }
+  if (last < text.length) segs.push({ type: "text", text: text.slice(last) });
+  return segs;
+}
+
 function toADF(text) {
   return { type: "doc", version: 1, content: String(text).split("\n").map((ln) => ({ type: "paragraph", content: ln ? [{ type: "text", text: ln }] : [] })) };
 }
@@ -180,7 +215,7 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
 
 module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
-  adfToText, toADF, buildReplyADF, maskCreds, applyCreds, createStore,
+  adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, createStore,
   REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
   loadOrCreateEnvKey, encryptEnv, decryptEnv,
 };
