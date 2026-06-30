@@ -472,6 +472,7 @@ loop-work/                     # (= 저장소 루트)
 | build 가 PR 없이 "성공"으로 기록됨 | claude 가 작업을 백그라운드로 미루고 PR 없이 턴 종료 | (해결됨) build 는 **PR URL 이 없으면 success 로 인정하지 않고 `incomplete`(재시도 대상)** 로 처리. build 프롬프트에 "동기 완료, 미루기 금지, PR 없으면 비정상 종료" 명시 |
 | 처리 이력 "PR 브랜치" 열이 비어 있음(`–`) | (해결됨) 브랜치 추출이 `feature/` 접두사로 고정돼 `feat/`·`fix/` 등 다른 접두사 브랜치를 못 잡음 | 수정됨: PR URL 로 `gh pr view --json headRefName` 을 조회해 실제 head 브랜치 기록(접두사 무관), merge 경로도 동일. 과거 누락분은 PR URL 로 역산해 `history.jsonl` 백필 가능 |
 | build 후 카드 본문 이미지가 깨짐(Jira·대시보드 모두 안 보임) | (해결됨) 완료 내역을 추가할 때 claude 가 설명을 markdown 으로 읽고 통째로 다시 써넣어, 붙여넣은 이미지 media 노드가 죽은 `external blob:` 참조로 재인코딩됨 | 수정됨: 완료 요약은 `SUMMARY_FILE` 에 저장하고 `append-summary.js` 가 설명 ADF 에 직접 append(기존 이미지/노드 보존). **단, 이미 깨진 blob 이미지는 복구 불가 — 작성자가 카드에 이미지를 다시 첨부해야 함** |
+| build 완료인데 카드 설명에 '완료 내역' 이 안 기재됨 | (해결됨) ① `set -u` 환경에서 append 단계가 `${JIRA_SITE}` 를 기본값 없이 참조해 변수 미설정 시 그 줄에서 스크립트가 죽음 ② 대시보드 단건 실행(`scriptEnv`)이 `JIRA_SITE`·`ATLASSIAN_EMAIL`·`ATLASSIAN_TOKEN` 을 주입하지 않아 자격증명이 비어 append 가 생략됨 | 수정됨: append 블록의 모든 변수 참조를 `${VAR:-}` 로 안전화 + `scriptEnv`(단건 실행)에도 Jira REST 자격증명 주입. 누락된 과거 카드는 '리뷰 반영(rework)' 재실행으로 요약 재생성·기재 가능 |
 
 ---
 

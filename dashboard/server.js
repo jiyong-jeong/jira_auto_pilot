@@ -159,6 +159,10 @@ function scriptEnv(id) {
   if (cred.anthropicApiKey) env.ANTHROPIC_API_KEY = cred.anthropicApiKey;
   if (cred.githubToken) { env.GH_TOKEN = cred.githubToken; env.GITHUB_TOKEN = cred.githubToken; }
   if (cred.slackWebhookUrl) env.SLACK_WEBHOOK_URL = cred.slackWebhookUrl;
+  // 완료 내역을 설명 ADF 에 직접 append(이미지 보존)하기 위한 Jira REST 자격증명 — 단건 즉시 실행 경로에도 주입
+  env.JIRA_SITE = cfg.jiraSite || "";
+  if (cred.atlassianEmail) env.ATLASSIAN_EMAIL = cred.atlassianEmail;
+  if (cred.atlassianToken) env.ATLASSIAN_TOKEN = cred.atlassianToken;
   return env;
 }
 

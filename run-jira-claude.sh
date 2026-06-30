@@ -356,8 +356,8 @@ if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" || "${RESULT}" == "rewor
   record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
   # 완료 요약을 설명 ADF '맨 아래'에 안전 append(기존 이미지/노드 보존). label 모드 + 요약 파일 존재 시.
   if [[ "${PHASE}" == "build" && "${TRIGGER_MODE}" == "label" && -s "${SUMMARY_FILE}" ]]; then
-    if command -v node >/dev/null 2>&1 && [[ -n "${JIRA_SITE}" && -n "${ATLASSIAN_EMAIL:-}" && -n "${ATLASSIAN_TOKEN:-}" ]]; then
-      ISSUE_KEY="${ISSUE_KEY}" JIRA_SITE="${JIRA_SITE}" ATLASSIAN_EMAIL="${ATLASSIAN_EMAIL}" ATLASSIAN_TOKEN="${ATLASSIAN_TOKEN}" \
+    if command -v node >/dev/null 2>&1 && [[ -n "${JIRA_SITE:-}" && -n "${ATLASSIAN_EMAIL:-}" && -n "${ATLASSIAN_TOKEN:-}" ]]; then
+      ISSUE_KEY="${ISSUE_KEY}" JIRA_SITE="${JIRA_SITE:-}" ATLASSIAN_EMAIL="${ATLASSIAN_EMAIL:-}" ATLASSIAN_TOKEN="${ATLASSIAN_TOKEN:-}" \
         node "${SELF_DIR}/append-summary.js" "${SUMMARY_FILE}" || echo ">> [${ISSUE_KEY}] 완료 내역 설명 append 실패(요약 파일 보존)" >&2
     else
       echo ">> [${ISSUE_KEY}] Jira REST 자격증명 미설정 → 완료 내역 설명 append 생략(요약: ${SUMMARY_FILE})" >&2
