@@ -321,6 +321,23 @@ async function repoPRReviews(repo, key, cred) {
   return out;
 }
 
+// 병합 완료된 카드의 clone 디렉토리(<repo이름>-<KEY>) 제거 — 작업 종료 후 디스크 정리. base 바로 아래 dir 만 안전 삭제.
+function removeCardClones(cfg, key) {
+  const base = cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos");
+  const removed = [], errors = [];
+  if (fs.existsSync(path.join(base, ".state", `${key}.lock`))) return { removed, errors: ["처리 중(lock) — clone 제거 생략"] };
+  let entries = [];
+  try { entries = fs.readdirSync(base, { withFileTypes: true }); } catch { return { removed, errors }; }
+  for (const ent of entries) {
+    if (!ent.isDirectory() || ent.name === ".state" || !ent.name.endsWith(`-${key}`)) continue;
+    const dir = path.join(base, ent.name);
+    if (path.dirname(path.resolve(dir)) !== path.resolve(base)) continue;   // 경로 안전성: base 직속만
+    try { fs.rmSync(dir, { recursive: true, force: true }); removed.push(ent.name); }
+    catch (e) { errors.push(`${ent.name}: ${(e && e.message) || e}`); }
+  }
+  return { removed, errors };
+}
+
 // 이슈를 완료 상태로 전환(doneStatus 이름 우선, 없으면 Done 카테고리 transition)
 async function transitionToDone(key, cfg, cred) {
   const t = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, null, cfg, cred);
@@ -506,14 +523,17 @@ app.post("/api/cards/:key/merge", async (req, res) => {
     const prs = results.flatMap((x) => x.merged);
     const branches = results.flatMap((x) => x.branches || []);
     const errors = results.flatMap((x) => x.errors.map((e) => `${x.repo}: ${e}`));
-    let doneStatus = null;
+    let doneStatus = null, removed = [];
     if (merged > 0) {
       try { doneStatus = await transitionToDone(key, cfg, cred); } catch (e) { errors.push(`상태전환: ${e.message}`); }
       // 병합 대기 라벨 제거(완료 표시 정리, best-effort)
       try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
       appendHistory(id, key, "merge", "merged", prs[0], branches[0] || "");   // 이력에 병합 성공 기록(PR head 브랜치 포함)
+      // 병합 완료 → clone 디렉토리 정리(디스크 회수)
+      const rc = removeCardClones(cfg, key); removed = rc.removed;
+      rc.errors.forEach((e) => errors.push(`clone 정리: ${e}`));
     }
-    res.json({ ok: merged > 0, merged, doneStatus, errors, prs });
+    res.json({ ok: merged > 0, merged, doneStatus, errors, prs, removed });
   } catch (e) { fail(res, e); }
 });
 

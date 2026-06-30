@@ -302,9 +302,9 @@ function ProjectCard({ proj, onDeleted, flash }) {
     if (!r.ok) loadCards();   // 실패 시 서버 상태로 되돌림
   };
   const mergeCard = async (key) => {
-    if (!window.confirm(`${key} 의 PR(들)을 rebase merge 하고 카드를 완료 처리할까요?`)) return;
+    if (!window.confirm(`${key} 의 PR(들)을 rebase merge 하고 카드를 완료 처리할까요?\n(병합되면 이 카드의 clone 디렉토리도 삭제됩니다)`)) return;
     const r = await api.post(`/api/cards/${key}/merge`, { project: PID });
-    if (r.ok) flash(`${key} 병합 ${r.merged}건${r.doneStatus ? ` · 완료(${r.doneStatus})` : ""}${r.errors?.length ? ` · 경고 ${r.errors.length}` : ""}`);
+    if (r.ok) flash(`${key} 병합 ${r.merged}건${r.doneStatus ? ` · 완료(${r.doneStatus})` : ""}${r.removed?.length ? ` · clone ${r.removed.length}개 정리` : ""}${r.errors?.length ? ` · 경고 ${r.errors.length}` : ""}`);
     else flash(r.message || (r.errors?.length ? r.errors[0] : "병합 실패(열린 PR 없음/충돌/권한 확인)"));
     loadCards();
   };
