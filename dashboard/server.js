@@ -293,6 +293,30 @@ async function commentCardPRs(key, repos, body, cred) {
   }
   return { posted, errors };
 }
+// 한 repo 의 이 이슈 관련 PR 들의 리뷰 내용(리뷰·PR 코멘트·인라인 코멘트) 조회 — 대시보드 표시용
+async function repoPRReviews(repo, key, cred) {
+  const or = ownerRepo(repo.url);
+  if (!or) return [];
+  const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "all", "--json", "number,url,title,state,headRefName"], cred);
+  let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
+  const out = [];
+  for (const pr of prs) {
+    const v = await gh(["pr", "view", String(pr.number), "--repo", or, "--json", "reviews,comments"], cred);
+    let d = {}; try { d = JSON.parse(v.stdout || "{}"); } catch {}
+    const ic = await gh(["api", `repos/${or}/pulls/${pr.number}/comments?per_page=100`], cred);
+    let inline = []; try { inline = JSON.parse(ic.stdout || "[]"); } catch {}
+    out.push({
+      repo: repo.name, owner: or, number: pr.number, url: pr.url, title: pr.title, state: pr.state, branch: pr.headRefName,
+      reviews: (d.reviews || [])
+        .filter((r) => (r.body && r.body.trim()) || (r.state && r.state !== "COMMENTED" && r.state !== "PENDING"))
+        .map((r) => ({ author: (r.author && r.author.login) || "?", state: r.state || "", body: r.body || "", submittedAt: r.submittedAt || "" })),
+      comments: (d.comments || []).map((c) => ({ author: (c.author && c.author.login) || "?", body: c.body || "", createdAt: c.createdAt || "" })),
+      inline: (Array.isArray(inline) ? inline : []).map((c) => ({ author: (c.user && c.user.login) || "?", body: c.body || "", path: c.path || "", line: c.line || c.original_line || null, createdAt: c.created_at || "" })),
+    });
+  }
+  return out;
+}
+
 // 이슈를 완료 상태로 전환(doneStatus 이름 우선, 없으면 Done 카테고리 transition)
 async function transitionToDone(key, cfg, cred) {
   const t = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, null, cfg, cred);
@@ -486,6 +510,20 @@ app.post("/api/cards/:key/merge", async (req, res) => {
       appendHistory(id, key, "merge", "merged", prs[0], branches[0] || "");   // 이력에 병합 성공 기록(PR head 브랜치 포함)
     }
     res.json({ ok: merged > 0, merged, doneStatus, errors, prs });
+  } catch (e) { fail(res, e); }
+});
+
+// 카드의 PR 리뷰 내용(리뷰·PR 코멘트·인라인 코멘트) 조회 — 카드 상세의 '리뷰' 영역에서 표시
+app.get("/api/cards/:key/reviews", async (req, res) => {
+  const key = req.params.key;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  try {
+    const { cfg, cred } = resolveProject(req);
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
+    const repos = cardRepos(cfg, (issue.fields && issue.fields.labels) || []);
+    const results = [];
+    for (const r of repos) { try { results.push(...await repoPRReviews(r, key, cred)); } catch { /* repo 단위 실패는 건너뜀 */ } }
+    res.json({ ok: true, prs: results });
   } catch (e) { fail(res, e); }
 });
 
