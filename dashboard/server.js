@@ -194,7 +194,7 @@ function runOnce(type) {
   return { ok: true, pid: proc.pid };
 }
 // 특정 카드 1건 즉시 실행(프로젝트 env 주입)
-function runCard(key, phase, stamp, projectId, reposLines, rework, reviewAfter) {
+function runCard(key, phase, stamp, projectId, reposLines, rework, reviewAfter, reviewOnly) {
   const isReview = phase === "review";   // review 는 run-review.sh(PR 자동 리뷰), 그 외는 run-jira-claude.sh
   const script = path.join(SCRIPTS_DIR, isReview ? "run-review.sh" : "run-jira-claude.sh");
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
@@ -209,6 +209,9 @@ function runCard(key, phase, stamp, projectId, reposLines, rework, reviewAfter) 
   if (rework) env.REWORK = "1";                          // 기존 PR 리뷰 반영 모드
   if (reviewAfter) env.REVIEW_AFTER = "1";               // 리뷰 반영 후 이어서 재리뷰(run-review.sh)
   if (isReview) env.FORCE_REVIEW = "1";                  // 수동 review: 승인 마커 있어도 강제 재리뷰
+  if (isReview && reviewOnly && reviewOnly.owner && reviewOnly.number != null) {  // 개별 PR 리뷰(사람 PR 포함)
+    env.REVIEW_ONLY_OWNER = String(reviewOnly.owner); env.REVIEW_ONLY_NUM = String(reviewOnly.number);
+  }
   const args = isReview ? [script, key] : [script, key, phase];
   const proc = spawn("bash", args, { cwd: SCRIPTS_DIR, env, detached: true, stdio: ["ignore", fd, fd] });
   try { fs.closeSync(fd); } catch {}
@@ -271,22 +274,6 @@ function gh(args, cred) {
     execFile("gh", args, { env: ghEnv(cred), maxBuffer: 1024 * 1024 }, (err, stdout, stderr) =>
       resolve({ ok: !err, stdout: stdout || "", stderr: stderr || (err && err.message) || "" }));
   });
-}
-// 한 repo 의 이 이슈 관련 PR: 열린 건 rebase merge, 이미 병합된 건 그대로 인정(완료 전환 트리거)
-async function mergeRepoPRs(repo, key, cred) {
-  const or = ownerRepo(repo.url);
-  if (!or) return { repo: repo.name, merged: [], errors: ["repo url 파싱 실패"] };
-  const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "all", "--json", "number,url,state,headRefName"], cred);
-  let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
-  if (!prs.length) return { repo: repo.name, merged: [], errors: list.ok ? ["PR 없음"] : [(list.stderr || "").slice(0, 160)] };
-  const merged = [], branches = [], errors = [];
-  for (const pr of prs) {
-    if (pr.state === "MERGED") { merged.push(pr.url); branches.push(pr.headRefName || ""); continue; }   // GitHub 에서 이미 병합됨 → 인정
-    if (pr.state !== "OPEN") continue;                              // CLOSED 등은 무시
-    const r = await gh(["pr", "merge", String(pr.number), "--repo", or, "--rebase", "--delete-branch"], cred);
-    if (r.ok) { merged.push(pr.url); branches.push(pr.headRefName || ""); } else errors.push(`#${pr.number}: ${(r.stderr || "").trim().slice(0, 160)}`);
-  }
-  return { repo: repo.name, merged, branches, errors };
 }
 // 카드의 열린 PR 들에 코멘트 작성(gh pr comment) — 리뷰 반영 요청 전달용
 async function commentCardPRs(key, repos, body, cred) {
@@ -465,7 +452,8 @@ app.post("/api/cards/:key/run", async (req, res) => {
       const { posted, errors } = await commentCardPRs(key, target, `[리뷰 반영 요청]\n${b.memo}`, cred);
       if (!posted.length) return res.json({ ok: false, message: "PR 코멘트 실패(열린 PR 없음/권한): " + (errors[0] || "") });
     }
-    res.json(runCard(key, phase, new Date().toISOString(), id, reposLines, rework, !!b.reviewAfter));
+    const reviewOnly = (b.reviewOwner && b.reviewNumber != null) ? { owner: b.reviewOwner, number: b.reviewNumber } : null;
+    res.json(runCard(key, phase, new Date().toISOString(), id, reposLines, rework, !!b.reviewAfter, reviewOnly));
   } catch (e) { fail(res, e); }
 });
 
@@ -516,68 +504,104 @@ app.post("/api/cards/:key/repos", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
-// 카드의 PR(들)을 rebase merge 하고, 1개 이상 병합되면 카드를 완료 상태로 전환
+// 봇(자동화) GitHub 로그인 — PR author 로 자동화/사람 PR 구분(비면 판별 불가 → 전체를 자동화로 간주하는 폴백)
+async function ghUserLogin(cred) {
+  try { const r = await gh(["api", "user", "--jq", ".login"], cred); return r.ok ? (r.stdout || "").trim() : ""; } catch { return ""; }
+}
+// 카드의 '모든' PR(대상 repo들) — author/state 포함. 1:N 표현·병합·완료 판정에 공통 사용.
+async function listCardPRs(repos, key, cred) {
+  const out = [];
+  for (const repo of repos) {
+    const or = ownerRepo(repo.url); if (!or) continue;
+    const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "all", "--json", "number,url,title,state,headRefName,isDraft,author,createdAt"], cred);
+    let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
+    for (const pr of prs) out.push({ repo: repo.name, owner: or, number: pr.number, url: pr.url, title: pr.title, state: pr.state, branch: pr.headRefName || "", isDraft: !!pr.isDraft, author: (pr.author && pr.author.login) || "", createdAt: pr.createdAt || "" });
+  }
+  return out;
+}
+// 카드 완료 확정(공통): 상태 전환 + prOpen 라벨 제거 + clone 정리 + 이력 기록
+async function finalizeCardDone(id, cfg, cred, key, mergedUrls, branches, errors) {
+  let doneStatus = null;
+  try { doneStatus = await transitionToDone(key, cfg, cred); } catch (e) { if (errors) errors.push(`상태전환: ${e.message}`); }
+  try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
+  const rc = removeCardClones(cfg, key);
+  appendHistory(id, key, "merge", "merged", mergedUrls[0] || "", branches[0] || "");
+  return { doneStatus, removed: rc.removed };
+}
+// 자동화(봇) PR 이 모두 병합됐으면(열린 봇 PR 0 · 병합 봇 PR ≥1) 카드 완료. 사람 PR 은 완료 판정에서 제외.
+async function maybeFinalizeCard(id, cfg, cred, key, repos, botLogin) {
+  const bot = (await listCardPRs(repos, key, cred)).filter((p) => !botLogin || p.author === botLogin);
+  const openBot = bot.filter((p) => p.state === "OPEN");
+  const mergedBot = bot.filter((p) => p.state === "MERGED");
+  if (mergedBot.length && openBot.length === 0) {
+    const fin = await finalizeCardDone(id, cfg, cred, key, mergedBot.map((p) => p.url), mergedBot.map((p) => p.branch), []);
+    return { finalized: true, ...fin };
+  }
+  return { finalized: false };
+}
+
+// 카드의 PR 목록(1:N) — 자동화/사람 PR 구분(isBot) 포함
+app.get("/api/cards/:key/prs", async (req, res) => {
+  const key = req.params.key;
+  if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
+  try {
+    const { cfg, cred } = resolveProject(req);
+    const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
+    const repos = cardRepos(cfg, (issue.fields && issue.fields.labels) || []);
+    const botLogin = await ghUserLogin(cred);
+    const prs = (await listCardPRs(repos, key, cred)).map((p) => ({ ...p, isBot: !botLogin || p.author === botLogin }));
+    res.json({ ok: true, prs, botLogin });
+  } catch (e) { fail(res, e); }
+});
+
+// 카드의 PR 병합 — body.{owner,number} 지정 시 '그 PR 하나만'(사람 PR 포함), 아니면 자동화(봇) PR 전체.
+// 병합 후 자동화 PR 이 모두 병합됐으면 카드를 완료 처리한다.
 app.post("/api/cards/:key/merge", async (req, res) => {
   const key = req.params.key;
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
   try {
     const { id, cfg, cred } = resolveProject(req);
+    const body = req.body || {};
     const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=labels`, null, cfg, cred);
     const repos = cardRepos(cfg, (issue.fields && issue.fields.labels) || []);
     if (!repos.length) return res.json({ ok: false, message: "대상 repo 가 없습니다." });
-    const results = [];
-    for (const r of repos) results.push(await mergeRepoPRs(r, key, cred));
-    const merged = results.reduce((n, x) => n + x.merged.length, 0);
-    const prs = results.flatMap((x) => x.merged);
-    const branches = results.flatMap((x) => x.branches || []);
-    const errors = results.flatMap((x) => x.errors.map((e) => `${x.repo}: ${e}`));
-    let doneStatus = null, removed = [];
-    if (merged > 0) {
-      try { doneStatus = await transitionToDone(key, cfg, cred); } catch (e) { errors.push(`상태전환: ${e.message}`); }
-      // 병합 대기 라벨 제거(완료 표시 정리, best-effort)
-      try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
-      appendHistory(id, key, "merge", "merged", prs[0], branches[0] || "");   // 이력에 병합 성공 기록(PR head 브랜치 포함)
-      // 병합 완료 → clone 디렉토리 정리(디스크 회수)
-      const rc = removeCardClones(cfg, key); removed = rc.removed;
-      rc.errors.forEach((e) => errors.push(`clone 정리: ${e}`));
+    const botLogin = await ghUserLogin(cred);
+    const allPRs = await listCardPRs(repos, key, cred);
+    let targets;
+    if (body.owner && body.number != null) {   // 개별 PR 지정(사용자가 명시 선택 — 사람 PR 도 가능)
+      targets = allPRs.filter((p) => p.owner === body.owner && String(p.number) === String(body.number));
+      if (!targets.length) return res.json({ ok: false, message: "지정한 PR 을 찾을 수 없습니다." });
+    } else {                                    // 기본: 자동화(봇) PR 전체
+      targets = allPRs.filter((p) => !botLogin || p.author === botLogin);
     }
-    res.json({ ok: merged > 0, merged, doneStatus, errors, prs, removed });
+    const mergedUrls = [], branches = [], errors = [];
+    for (const pr of targets) {
+      if (pr.state === "MERGED") { mergedUrls.push(pr.url); branches.push(pr.branch); continue; }
+      if (pr.state !== "OPEN") continue;
+      const r = await gh(["pr", "merge", String(pr.number), "--repo", pr.owner, "--rebase", "--delete-branch"], cred);
+      if (r.ok) { mergedUrls.push(pr.url); branches.push(pr.branch); } else errors.push(`${pr.repo} #${pr.number}: ${(r.stderr || "").trim().slice(0, 160)}`);
+    }
+    let doneStatus = null, removed = [];
+    if (mergedUrls.length) {
+      const fin = await maybeFinalizeCard(id, cfg, cred, key, repos, botLogin);
+      if (fin.finalized) { doneStatus = fin.doneStatus; removed = fin.removed; }
+    }
+    res.json({ ok: mergedUrls.length > 0, merged: mergedUrls.length, doneStatus, errors, prs: mergedUrls, removed });
   } catch (e) { fail(res, e); }
 });
 
-// 카드의 PR 병합 상태 조회(외부 병합 감지용): 대상 repo 들의 MERGED/OPEN PR 수집
-async function cardMergeState(repos, key, cred) {
-  const mergedUrls = [], mergedBranches = []; let openCount = 0;
-  for (const repo of repos) {
-    const or = ownerRepo(repo.url); if (!or) continue;
-    const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "all", "--json", "url,state,headRefName"], cred);
-    let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
-    for (const pr of prs) {
-      if (pr.state === "MERGED") { mergedUrls.push(pr.url); mergedBranches.push(pr.headRefName || ""); }
-      else if (pr.state === "OPEN") openCount++;
-    }
-  }
-  return { mergedUrls, mergedBranches, openCount };
-}
-// 외부(대시보드 밖)에서 병합된 카드 자동 완료: await-merge(claude-pr) 카드 중 PR 이 모두 MERGED(열린 PR 0)면
-// 재병합 없이 완료 처리(상태 전환 + claude-pr 라벨 제거 + clone 정리 + 이력 기록).
+// 외부(대시보드 밖)에서 병합된 카드 자동 완료: 자동화(봇) PR 이 모두 병합됐으면 완료 처리(사람 PR 은 무시).
 async function completeMergedCards(id) {
   const cfg = getConfig(id), cred = getCreds(id);
   if (!cfg.jiraSite || !cred || !cred.atlassianToken) return { completed: [] };
   let data; try { data = await jiraSearch(detectJql("review", cfg), cfg, cred); } catch { return { completed: [] }; }
+  const botLogin = await ghUserLogin(cred);
   const completed = [];
   for (const i of (data.issues || [])) {
     const key = i.key;
     const repos = cardRepos(cfg, (i.fields && i.fields.labels) || []);
     if (!repos.length) continue;
-    let st; try { st = await cardMergeState(repos, key, cred); } catch { continue; }
-    if (st.mergedUrls.length && st.openCount === 0) {   // 모든 PR 병합됨(열린 PR 없음) → 외부 병합 완료
-      try { await transitionToDone(key, cfg, cred); } catch { /* 전환 불가면 라벨/이력만 정리 */ }
-      try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
-      removeCardClones(cfg, key);
-      appendHistory(id, key, "merge", "merged", st.mergedUrls[0], st.mergedBranches[0] || "");
-      completed.push(key);
-    }
+    try { const fin = await maybeFinalizeCard(id, cfg, cred, key, repos, botLogin); if (fin.finalized) completed.push(key); } catch {}
   }
   return { completed };
 }

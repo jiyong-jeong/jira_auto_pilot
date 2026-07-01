@@ -256,6 +256,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [repoEnv, setRepoEnv] = useState({ repo: "", content: "" });
   const [reworkMemo, setReworkMemo] = useState("");
   const [reviews, setReviews] = useState(null);   // { key, loading, prs:[...] } — PR 리뷰 내용
+  const [prs, setPrs] = useState(null);           // { key, loading, list:[...], botLogin } — 카드 1:N PR 목록
 
   const credSet = (k) => creds[k] === true;
   const openRepoEnv = async (name) => {
@@ -356,11 +357,29 @@ function ProjectCard({ proj, onDeleted, flash }) {
     if (!r.ok) loadCards();   // 실패 시 서버 상태로 되돌림
   };
   const mergeCard = async (key) => {
-    if (!window.confirm(`${key} 의 PR(들)을 rebase merge 하고 카드를 완료 처리할까요?\n(병합되면 이 카드의 clone 디렉토리도 삭제됩니다)`)) return;
+    if (!window.confirm(`${key} 의 '자동화 PR' 을 rebase merge 하고, 자동화 PR 이 모두 병합되면 카드를 완료 처리할까요?\n(사람이 만든 PR 은 건드리지 않습니다. 완료 시 clone 디렉토리도 삭제)`)) return;
     const r = await api.post(`/api/cards/${key}/merge`, { project: PID });
     if (r.ok) flash(`${key} 병합 ${r.merged}건${r.doneStatus ? ` · 완료(${r.doneStatus})` : ""}${r.removed?.length ? ` · clone ${r.removed.length}개 정리` : ""}${r.errors?.length ? ` · 경고 ${r.errors.length}` : ""}`);
-    else flash(r.message || (r.errors?.length ? r.errors[0] : "병합 실패(열린 PR 없음/충돌/권한 확인)"));
+    else flash(r.message || (r.errors?.length ? r.errors[0] : "병합 실패(열린 자동화 PR 없음/충돌/권한 확인)"));
+    if (prs && prs.key === key) loadPrs(key);
     loadCards();
+  };
+  const loadPrs = async (key) => {
+    setPrs({ key, loading: true, list: [], botLogin: "" });
+    const r = await api.get(withP(`/api/cards/${key}/prs`));
+    setPrs((p) => (p && p.key === key) ? { key, loading: false, list: r.ok ? (r.prs || []) : [], botLogin: r.botLogin || "", err: r.ok ? "" : (r.message || "조회 실패") } : p);
+  };
+  const mergeOnePr = async (key, pr) => {
+    if (!window.confirm(`${pr.repo} #${pr.number} (${pr.isBot ? "자동화" : "사람"} @${pr.author}) 을(를) rebase merge 할까요?`)) return;
+    const r = await api.post(`/api/cards/${key}/merge`, { owner: pr.owner, number: pr.number, project: PID });
+    if (r.ok) flash(`#${pr.number} 병합${r.doneStatus ? ` · 카드 완료(${r.doneStatus})` : ""}${r.removed?.length ? ` · clone 정리` : ""}`);
+    else flash(r.message || (r.errors?.length ? r.errors[0] : "병합 실패"));
+    loadPrs(key); loadCards();
+  };
+  const reviewOnePr = async (key, pr) => {
+    const r = await api.post(`/api/cards/${key}/run`, { phase: "review", reviewOwner: pr.owner, reviewNumber: pr.number, project: PID });
+    flash(r.ok ? `#${pr.number} 리뷰 실행 — Claude 실행 로그(review) 확인` : (r.message || "실패"));
+    if (r.ok) showClaudeLog(key, "review");
   };
   const showClaudeLog = async (key, phase) => { setClaudeLog({ key, phase, text: "불러오는 중…" }); const r = await api.get(withP(`/api/claude-log/${key}/${phase}?lines=600`)); setClaudeLog((p) => (p && p.key === key && p.phase === phase) ? { ...p, text: r.ok ? r.log : (r.message || "조회 실패") } : p); };
   const loadReviews = async (key) => {
@@ -662,6 +681,41 @@ function ProjectCard({ proj, onDeleted, flash }) {
                                 <span className="text-[11px] text-slate-500">PR 리뷰 · 리뷰 반영 · 병합</span>
                               </div>
                               <div className="p-3 space-y-3">
+                                {/* PR 목록 (카드 1 : PR N) — 자동화/사람 PR 구분 + 개별 액션 */}
+                                <div className="p-2 rounded bg-slate-700/20 border border-slate-600/40">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs text-slate-300">PR 목록 (카드 1 : PR N)</span>
+                                    <Btn color="slate" onClick={() => loadPrs(c.key)}>{prs && prs.key === c.key && prs.loading ? "불러오는 중…" : "PR 불러오기"}</Btn>
+                                  </div>
+                                  {prs && prs.key === c.key && !prs.loading && (
+                                    prs.err ? <p className="text-xs text-rose-300">{prs.err}</p>
+                                    : prs.list.length === 0 ? <p className="text-[11px] text-slate-500">이 카드의 PR 이 없습니다.</p>
+                                    : (
+                                      <div className="space-y-1.5">
+                                        {prs.list.map((pr, i) => {
+                                          const stCls = pr.state === "MERGED" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : pr.state === "OPEN" ? "bg-sky-500/15 text-sky-300 border-sky-500/40" : "bg-slate-600/30 text-slate-400 border-slate-600";
+                                          return (
+                                            <div key={i} className="rounded border border-slate-700 bg-black/20 p-2">
+                                              <div className="flex items-center gap-2 flex-wrap">
+                                                <a href={pr.url} target="_blank" rel="noreferrer" className="text-xs text-indigo-400 hover:underline">{pr.repo} #{pr.number}</a>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${stCls}`}>{pr.state}{pr.isDraft ? " · DRAFT" : ""}</span>
+                                                <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${pr.isBot ? "bg-violet-500/15 text-violet-300 border-violet-500/40" : "bg-amber-500/15 text-amber-300 border-amber-500/40"}`}>{pr.isBot ? "자동화" : "사람"} @{pr.author || "?"}</span>
+                                              </div>
+                                              <div className="text-[11px] text-slate-300 mt-0.5 truncate">{pr.title}</div>
+                                              <div className="text-[10px] text-slate-500 font-mono truncate">{pr.branch}</div>
+                                              <div className="flex gap-2 mt-1">
+                                                {pr.state === "OPEN" && <button onClick={() => mergeOnePr(c.key, pr)} className="text-[11px] px-2 py-0.5 rounded border border-teal-500/40 text-teal-300 hover:bg-teal-500/10 transition">이 PR 병합</button>}
+                                                <button onClick={() => reviewOnePr(c.key, pr)} className="text-[11px] px-2 py-0.5 rounded border border-violet-500/40 text-violet-300 hover:bg-violet-500/10 transition">이 PR 리뷰</button>
+                                                <a href={pr.url} target="_blank" rel="noreferrer" className="text-[11px] px-2 py-0.5 rounded border border-slate-600 text-slate-300 hover:bg-slate-600/20 transition">열기</a>
+                                              </div>
+                                            </div>
+                                          );
+                                        })}
+                                        <p className="text-[10px] text-slate-500 mt-1">‘자동화’=봇 계정({prs.botLogin || "?"})이 만든 PR. 일괄 ‘PR 병합’·자동 완료·review 루프는 자동화 PR만 대상, 사람 PR은 개별 버튼으로만 처리됩니다.</p>
+                                      </div>
+                                    )
+                                  )}
+                                </div>
                                 {/* PR 리뷰 내용(GitHub 리뷰·코멘트·인라인) */}
                                 <div className="p-2 rounded bg-violet-500/5 border border-violet-500/20">
                                   <div className="flex items-center justify-between mb-1">
@@ -735,7 +789,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
                                 </div>
                                 {/* PR 병합(rebase) */}
                                 <div className="p-2 rounded bg-teal-500/5 border border-teal-500/20 flex items-center justify-between">
-                                  <span className="text-xs text-teal-300">PR 병합 (rebase merge · 병합되면 카드 완료 + clone 삭제)</span>
+                                  <span className="text-xs text-teal-300">PR 병합 (자동화 PR 일괄 · rebase merge · 모두 병합되면 카드 완료 + clone 삭제)</span>
                                   <Btn color="green" onClick={() => mergeCard(c.key)}>PR 병합</Btn>
                                 </div>
                               </div>
