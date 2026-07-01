@@ -43,10 +43,21 @@ if [[ "${TRIGGER_MODE}" == "text" ]]; then
 else
   TRIGGER_FILTER="labels = \"${TRIGGER_LABEL}\""
 fi
+# 완료 상태 제외(복수 허용: 쉼표 구분) → status NOT IN ("A","B"). 공백은 트림.
+DONE_FILTER=""
+IFS=',' read -ra _DONES <<< "${DONE_STATUS}"
+_DONE_IN=""
+for _s in "${_DONES[@]}"; do
+  _t="${_s#"${_s%%[![:space:]]*}"}"; _t="${_t%"${_t##*[![:space:]]}"}"   # ltrim/rtrim
+  [[ -z "${_t}" ]] && continue
+  [[ -n "${_DONE_IN}" ]] && _DONE_IN="${_DONE_IN}, "
+  _DONE_IN="${_DONE_IN}\"${_t}\""
+done
+[[ -n "${_DONE_IN}" ]] && DONE_FILTER=" AND status NOT IN (${_DONE_IN})"
 if [[ "${MODE}" == "plan" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND ${TRIGGER_FILTER} AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${FAILED_FILTER}${PROJECT_FILTER}"
+  JQL="assignee = currentUser()${DONE_FILTER} AND ${TRIGGER_FILTER} AND (labels != \"${PLANNED_LABEL}\" OR labels IS EMPTY)${FAILED_FILTER}${PROJECT_FILTER}"
 elif [[ "${MODE}" == "build" ]]; then
-  JQL="assignee = currentUser() AND status != \"${DONE_STATUS}\" AND ${TRIGGER_FILTER} AND labels = \"${PLANNED_LABEL}\" AND labels = \"${ANSWERED_LABEL}\"${FAILED_FILTER}${PROJECT_FILTER}"
+  JQL="assignee = currentUser()${DONE_FILTER} AND ${TRIGGER_FILTER} AND labels = \"${PLANNED_LABEL}\" AND labels = \"${ANSWERED_LABEL}\"${FAILED_FILTER}${PROJECT_FILTER}"
 else
   echo "Usage: $0 <plan|build>" >&2
   exit 1

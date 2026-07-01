@@ -58,7 +58,7 @@ const DEFAULT_CONFIG = {
 
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
-const { slugify, triggerClause, detectJql, adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX } = lib;
+const { slugify, triggerClause, detectJql, adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX, doneStatusList } = lib;
 // repo 별 env 파일 경로(repo 전용 env 만 사용; 없으면 미복사 — run-jira 가 -f 로 확인)
 function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
 function repoEnvSrc(cfg, repoName) { return repoEnvFile(cfg, repoName); }
@@ -338,12 +338,13 @@ function removeCardClones(cfg, key) {
   return { removed, errors };
 }
 
-// 이슈를 완료 상태로 전환(doneStatus 이름 우선, 없으면 Done 카테고리 transition)
+// 이슈를 완료 상태로 전환(설정한 완료 상태명 우선순위대로 시도, 없으면 Done 카테고리 transition)
 async function transitionToDone(key, cfg, cred) {
   const t = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, null, cfg, cred);
   const trs = t.transitions || [];
-  const tr = trs.find((x) => x.to && x.to.name === cfg.doneStatus)
-    || trs.find((x) => x.to && x.to.statusCategory && x.to.statusCategory.key === "done");
+  let tr = null;
+  for (const name of doneStatusList(cfg)) { tr = trs.find((x) => x.to && x.to.name === name); if (tr) break; }  // 설정 순서(첫번째=주 완료)대로
+  if (!tr) tr = trs.find((x) => x.to && x.to.statusCategory && x.to.statusCategory.key === "done");
   if (!tr) throw new Error(`완료로 가는 transition 없음(가능: ${trs.map((x) => x.name).join(", ")})`);
   await jiraReq("POST", `/rest/api/3/issue/${encodeURIComponent(key)}/transitions`, { transition: { id: tr.id } }, cfg, cred);
   return tr.to.name;
@@ -600,7 +601,7 @@ app.get("/api/cards", async (req, res) => {
       const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}` };
       const proc = procInfo(i.key);
       let stage;
-      if (catKey === "done" || it.status === cfg.doneStatus) stage = "done"; // 상태 카테고리 Done 이거나 설정 완료 상태명 일치
+      if (catKey === "done" || doneStatusList(cfg).includes(it.status)) stage = "done"; // 상태 카테고리 Done 이거나 설정 완료 상태명(복수 가능) 일치
       else if (proc) stage = "processing";                                   // 처리 중(락 존재)
       else stage = labelStage(it);
       return { ...it, stage, proc };

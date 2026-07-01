@@ -66,12 +66,22 @@ function triggerClause(cfg) {
   return cfg.triggerMode === "text" ? `text ~ "${cfg.triggerText}"` : `labels = "${cfg.triggerLabel}"`;
 }
 
+// 완료 상태명(복수 허용): 쉼표로 구분해 여러 개 지정 가능. 첫 번째가 병합 시 전환 대상(주 완료 상태),
+// 전체가 탐지 제외·'완료' 단계 판정에 쓰인다. 배열/문자열 모두 수용.
+function doneStatusList(cfg) {
+  const raw = cfg && cfg.doneStatus;
+  const arr = Array.isArray(raw) ? raw : String(raw == null ? "" : raw).split(",");
+  return arr.map((s) => String(s).trim()).filter(Boolean);
+}
+
 function detectJql(mode, cfg) {
   const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
   const failed = ` AND (labels != "${cfg.failedLabel}" OR labels IS EMPTY)`;
-  // 완료 제외: 상태 카테고리 Done + 설정한 완료 상태명(doneStatus) 둘 다. (워크플로마다 완료가
+  // 완료 제외: 상태 카테고리 Done + 설정한 완료 상태명(doneStatus, 복수 가능) 모두. (워크플로마다 완료가
   // 'Done 카테고리'일 수도, 'DEV COMPLETED' 처럼 카테고리가 다른 커스텀 상태일 수도 있어 둘 다 제외)
-  const doneName = cfg.doneStatus ? ` AND status != "${cfg.doneStatus}"` : "";
+  const dones = doneStatusList(cfg);
+  const doneName = dones.length === 1 ? ` AND status != "${dones[0]}"`
+    : dones.length > 1 ? ` AND status NOT IN (${dones.map((s) => `"${s}"`).join(", ")})` : "";
   const prLabel = cfg.prOpenLabel || "claude-pr";
   const base = `assignee = currentUser() AND statusCategory != Done${doneName} AND ${triggerClause(cfg)}`;
   if (mode === "plan") return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
@@ -266,7 +276,7 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
 
 module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
-  adfToText, adfSegments, toADF, mdInline, mdToADF, buildReplyADF, maskCreds, applyCreds, createStore,
+  adfToText, adfSegments, toADF, mdInline, mdToADF, buildReplyADF, maskCreds, applyCreds, createStore, doneStatusList,
   REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
   loadOrCreateEnvKey, encryptEnv, decryptEnv,
 };

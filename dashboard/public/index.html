@@ -337,7 +337,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
         {config.triggerMode === "text"
           ? <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
           : <Field label="트리거 라벨" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work" />}
-        <Field label="완료 상태명" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} />
+        <Field label="완료 상태명(쉼표로 복수 지정)" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} placeholder="DEV COMPLETED, Done" />
         <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
         <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
         <Field label="동시 처리 상한 (병렬)" type="number" value={config.maxParallel} onChange={(v) => setConfig({ ...config, maxParallel: parseInt(v || "3", 10) })} placeholder="3" />

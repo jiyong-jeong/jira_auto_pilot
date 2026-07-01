@@ -40,6 +40,24 @@ test("detectJql: 프로젝트 키 없으면 project 필터 없음", () => {
   assert.doesNotMatch(jql, /project =/);
 });
 
+test("doneStatusList: 쉼표 구분 복수 + 트림 + 빈값 제거, 배열도 수용", () => {
+  assert.deepEqual(lib.doneStatusList({ doneStatus: "DEV COMPLETED" }), ["DEV COMPLETED"]);
+  assert.deepEqual(lib.doneStatusList({ doneStatus: " DEV COMPLETED , Done ,, Closed " }), ["DEV COMPLETED", "Done", "Closed"]);
+  assert.deepEqual(lib.doneStatusList({ doneStatus: ["A", " B "] }), ["A", "B"]);
+  assert.deepEqual(lib.doneStatusList({ doneStatus: "" }), []);
+  assert.deepEqual(lib.doneStatusList({}), []);
+});
+
+test("detectJql: 완료 상태 복수 → status NOT IN, 단일 → status !=", () => {
+  const multi = lib.detectJql("plan", { triggerMode: "label", triggerLabel: "cw", doneStatus: "DEV COMPLETED, Done", plannedLabel: "P", failedLabel: "F" });
+  assert.match(multi, /status NOT IN \("DEV COMPLETED", "Done"\)/);
+  const single = lib.detectJql("plan", { triggerMode: "label", triggerLabel: "cw", doneStatus: "DEV COMPLETED", plannedLabel: "P", failedLabel: "F" });
+  assert.match(single, /status != "DEV COMPLETED"/);
+  assert.doesNotMatch(single, /NOT IN/);
+  const none = lib.detectJql("plan", { triggerMode: "label", triggerLabel: "cw", doneStatus: "", plannedLabel: "P", failedLabel: "F" });
+  assert.doesNotMatch(none, /status (!=|NOT IN)/);
+});
+
 test("adfToText: 문단/제목/불릿/인용/멘션/줄바꿈", () => {
   const doc = { type: "doc", content: [
     { type: "paragraph", content: [{ type: "text", text: "줄1" }] },
