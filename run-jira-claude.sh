@@ -123,6 +123,16 @@ record_history() {
   printf '{"ts":"%s","project":"%s","key":"%s","phase":"%s","result":"%s","pr":"%s","branch":"%s"}\n' \
     "${ts}" "${PROJECT_ID:-}" "${ISSUE_KEY}" "${PHASE}" "${result}" "${pr}" "${branch}" >> "${HISTORY_FILE}"
 }
+# 멀티 repo: 생성된 PR 을 '각각' 개별 이력으로 기록(PR 마다 head 브랜치 조회). PR 이 없으면 1건만.
+record_history_prs() {
+  local result="$1" _pr _br
+  if [[ -z "${ALL_PRS:-}" ]]; then record_history "${result}" "" ""; return; fi
+  while IFS= read -r _pr; do
+    [[ -z "${_pr}" ]] && continue
+    _br="$(gh pr view "${_pr}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
+    record_history "${result}" "${_pr}" "${_br}"
+  done <<< "${ALL_PRS}"
+}
 
 # ===== 필수 도구 확인 =====
 for cmd in git claude; do
@@ -274,7 +284,7 @@ PR 을 하나도 생성하지 못했다면 절대 완료로 간주하지 말고,
    - 테스트가 '존재하지 않으면' 테스트는 건너뛰고, 빌드/컴파일(${BUILD_DESC})만 시도하세요.
      빌드 수단이 있으면 실행해 통과시키고(실패 시 고쳐서 통과), 빌드 수단 자체가 없으면 이 단계를 건너뜁니다.
    - 검증을 통과(또는 정당하게 건너뜀)한 경우에만 다음 단계로 진행하세요.
-5. 구현·검증 후 — 위 '각 repo' 에 대해(변경이 필요 없는 repo 는 건너뜀):
+5. 구현·검증 후 — 위 '각 repo' 에 대해(변경이 필요 없는 repo 는 건너뜀). **여러 repo 를 수정했다면 repo 마다 각각 별도의 브랜치·PR 을 생성하세요(여러 repo 변경을 하나의 PR 로 합치지 말 것). PR 은 각 repo 의 origin 에 그 repo 변경만 담아 올립니다.**:
    - 해당 repo 디렉토리로 이동(cd)해서 작업하세요.
    - PR 생성 전 'gh pr list' 로 이 이슈의 PR/브랜치가 이미 있는지 확인하고, 있으면 그 repo 는 중복 생성하지 말고 건너뛰세요.
    - feature/${ISSUE_KEY}-<짧은-설명> 브랜치 생성 → 명확한 메시지로 커밋(메시지 하단에 '${ISSUE_KEY}' 명시) → 'origin' push.
@@ -327,9 +337,11 @@ fi
 set -e
 
 # 결과 분류: PR/브랜치 추출 + 미완료 감지
-PR_URL=""; BRANCH_OUT=""; RESULT="failed"
+PR_URL=""; BRANCH_OUT=""; ALL_PRS=""; RESULT="failed"
 if [[ "${CLAUDE_OK}" -eq 0 ]]; then
-  PR_URL="$(grep -oE 'https://github\.com/[^ )]+/pull/[0-9]+' "${CLAUDE_OUT}" | head -n1 || true)"
+  # 멀티 repo: 생성된 '모든' PR URL 수집(중복 제거, 순서 보존). 첫 번째를 대표로 사용(결과 판정·Slack).
+  ALL_PRS="$(grep -oE 'https://github\.com/[^ )]+/pull/[0-9]+' "${CLAUDE_OUT}" | awk '!seen[$0]++' || true)"
+  PR_URL="${ALL_PRS%%$'\n'*}"   # 첫 줄(대표 PR) — 순수 bash(파이프 SIGPIPE 회피)
   # 브랜치명: PR 의 실제 head 브랜치를 우선 사용(feat/·fix/ 등 접두사 무관). 실패 시 출력에서 접두사 포괄 추출.
   if [[ -n "${PR_URL}" ]]; then
     BRANCH_OUT="$(gh pr view "${PR_URL}" --json headRefName --jq '.headRefName' 2>/dev/null || true)"
@@ -353,7 +365,7 @@ fi
 if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" || "${RESULT}" == "rework" ]]; then
   rm -f "${FAIL_FILE}"
   echo ">> [${ISSUE_KEY}] 완료 (phase=${PHASE}, result=${RESULT})"
-  record_history "${RESULT}" "${PR_URL}" "${BRANCH_OUT}"
+  record_history_prs "${RESULT}"   # 생성된 PR 을 repo 별로 각각 이력에 기록(멀티 repo)
   # 완료 요약을 설명 ADF '맨 아래'에 안전 append(기존 이미지/노드 보존). label 모드 + 요약 파일 존재 시.
   if [[ "${PHASE}" == "build" && "${TRIGGER_MODE}" == "label" && -s "${SUMMARY_FILE}" ]]; then
     if command -v node >/dev/null 2>&1 && [[ -n "${JIRA_SITE:-}" && -n "${ATLASSIAN_EMAIL:-}" && -n "${ATLASSIAN_TOKEN:-}" ]]; then
@@ -365,8 +377,11 @@ if [[ "${RESULT}" == "success" || "${RESULT}" == "skip" || "${RESULT}" == "rewor
   fi
   if [[ "${RESULT}" == "success" || "${RESULT}" == "rework" ]]; then
     [[ "${RESULT}" == "rework" ]] && MSG="🔧 [${ISSUE_KEY}] 리뷰 반영 완료(PR 갱신)" || MSG="✅ [${ISSUE_KEY}] ${PHASE} 처리 완료"
-    [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
-    [[ -n "${BRANCH_OUT}" ]] && MSG="${MSG} · branch: ${BRANCH_OUT}"
+    PR_COUNT="$(printf '%s\n' "${ALL_PRS}" | grep -c . || true)"
+    if [[ "${PR_COUNT}" -gt 1 ]]; then MSG="${MSG} · PR ${PR_COUNT}건:"$'\n'"$(printf '%s\n' "${ALL_PRS}")"; else
+      [[ -n "${PR_URL}" ]] && MSG="${MSG} · PR: ${PR_URL}"
+      [[ -n "${BRANCH_OUT}" ]] && MSG="${MSG} · branch: ${BRANCH_OUT}"
+    fi
     notify_slack "${MSG}"
     # 리뷰 반영 후 재리뷰: REVIEW_AFTER=1 이면 이어서 리뷰어(run-review.sh)를 실행해 갱신된 PR 을 다시 리뷰.
     if [[ "${REVIEW_AFTER:-}" == "1" && -f "${SELF_DIR}/run-review.sh" ]]; then
