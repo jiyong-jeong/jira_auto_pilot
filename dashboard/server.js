@@ -195,7 +195,8 @@ function runOnce(type) {
 }
 // 특정 카드 1건 즉시 실행(프로젝트 env 주입)
 function runCard(key, phase, stamp, projectId, reposLines, rework) {
-  const script = path.join(SCRIPTS_DIR, "run-jira-claude.sh");
+  const isReview = phase === "review";   // review 는 run-review.sh(PR 자동 리뷰), 그 외는 run-jira-claude.sh
+  const script = path.join(SCRIPTS_DIR, isReview ? "run-review.sh" : "run-jira-claude.sh");
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
   const logPath = path.join(SCRIPTS_DIR, `loop-${phase}.log`);
   let fd;
@@ -206,7 +207,9 @@ function runCard(key, phase, stamp, projectId, reposLines, rework) {
   const env = scriptEnv(projectId);
   if (reposLines != null) env.CARD_REPOS = reposLines;   // 카드 라벨로 좁힌 대상 repo
   if (rework) env.REWORK = "1";                          // 기존 PR 리뷰 반영 모드
-  const proc = spawn("bash", [script, key, phase], { cwd: SCRIPTS_DIR, env, detached: true, stdio: ["ignore", fd, fd] });
+  if (isReview) env.FORCE_REVIEW = "1";                  // 수동 review: 승인 마커 있어도 강제 재리뷰
+  const args = isReview ? [script, key] : [script, key, phase];
+  const proc = spawn("bash", args, { cwd: SCRIPTS_DIR, env, detached: true, stdio: ["ignore", fd, fd] });
   try { fs.closeSync(fd); } catch {}
   proc.unref();
   return { ok: true, pid: proc.pid };
@@ -445,7 +448,7 @@ app.post("/api/cards/:key/run", async (req, res) => {
   const phase = b.phase;
   const rework = !!b.rework;
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "이슈 키 형식 오류" });
-  if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build" });
+  if (!["plan", "build", "review"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 는 plan|build|review" });
   try {
     const { id, cfg, cred } = resolveProject(req);
     let reposLines = null, repos = [];

@@ -72,9 +72,9 @@ for OR in "${R_OWNER[@]}"; do
   while IFS= read -r N; do
     [[ -z "${N}" ]] && continue
     PR_URL="https://github.com/${OR}/pull/${N}"
-    # 승인 마커가 이미 있으면 스킵(승인 완료 → 영구 스킵)
+    # 승인 마커가 이미 있으면 스킵(승인 완료 → 영구 스킵). 단, 수동 실행(FORCE_REVIEW=1)은 강제 재리뷰.
     BODIES="$(gh api "repos/${OR}/issues/${N}/comments?per_page=100" --jq '.[].body' 2>/dev/null || true)"
-    if printf '%s' "${BODIES}" | grep -q "${APPROVED_MARKER}"; then
+    if [[ "${FORCE_REVIEW:-}" != "1" ]] && printf '%s' "${BODIES}" | grep -q "${APPROVED_MARKER}"; then
       echo ">> [${ISSUE_KEY}] ${OR}#${N} 이미 승인됨(마커 존재) → 스킵"
       continue
     fi

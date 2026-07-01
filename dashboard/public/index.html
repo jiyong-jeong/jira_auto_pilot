@@ -74,6 +74,7 @@ function Btn({ children, onClick, color = "indigo", disabled }) {
     green: "bg-emerald-600 hover:bg-emerald-500",
     red: "bg-rose-600 hover:bg-rose-500",
     slate: "bg-slate-700 hover:bg-slate-600",
+    violet: "bg-violet-600 hover:bg-violet-500",
   };
   return (
     <button onClick={onClick} disabled={disabled}
@@ -523,10 +524,12 @@ function ProjectCard({ proj, onDeleted, flash }) {
                               <span className="text-xs text-slate-400">이 카드만 즉시 실행:</span>
                               <Btn color="indigo" onClick={() => runCardNow(c.key, "plan")}>plan</Btn>
                               <Btn color="indigo" onClick={() => runCardNow(c.key, "build")}>build</Btn>
+                              <Btn color="violet" onClick={() => runCardNow(c.key, "review")}>review</Btn>
                               {c.stage === "processing" && <Btn color="red" onClick={() => stopCard(c.key)}>■ 중지({c.proc})</Btn>}
                               <span className="text-xs text-slate-400 ml-3">Claude 실행 로그:</span>
                               <Btn color="slate" onClick={() => showClaudeLog(c.key, "plan")}>plan</Btn>
                               <Btn color="slate" onClick={() => showClaudeLog(c.key, "build")}>build</Btn>
+                              <Btn color="slate" onClick={() => showClaudeLog(c.key, "review")}>review</Btn>
                             </div>
                             {/* 대상 repo 선택(기존 카드의 repo_<name> 라벨 토글) */}
                             {(config.repos || []).length > 0 && (
