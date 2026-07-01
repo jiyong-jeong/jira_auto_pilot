@@ -545,6 +545,53 @@ app.post("/api/cards/:key/merge", async (req, res) => {
   } catch (e) { fail(res, e); }
 });
 
+// 카드의 PR 병합 상태 조회(외부 병합 감지용): 대상 repo 들의 MERGED/OPEN PR 수집
+async function cardMergeState(repos, key, cred) {
+  const mergedUrls = [], mergedBranches = []; let openCount = 0;
+  for (const repo of repos) {
+    const or = ownerRepo(repo.url); if (!or) continue;
+    const list = await gh(["pr", "list", "--repo", or, "--search", key, "--state", "all", "--json", "url,state,headRefName"], cred);
+    let prs = []; try { prs = JSON.parse(list.stdout || "[]"); } catch {}
+    for (const pr of prs) {
+      if (pr.state === "MERGED") { mergedUrls.push(pr.url); mergedBranches.push(pr.headRefName || ""); }
+      else if (pr.state === "OPEN") openCount++;
+    }
+  }
+  return { mergedUrls, mergedBranches, openCount };
+}
+// 외부(대시보드 밖)에서 병합된 카드 자동 완료: await-merge(claude-pr) 카드 중 PR 이 모두 MERGED(열린 PR 0)면
+// 재병합 없이 완료 처리(상태 전환 + claude-pr 라벨 제거 + clone 정리 + 이력 기록).
+async function completeMergedCards(id) {
+  const cfg = getConfig(id), cred = getCreds(id);
+  if (!cfg.jiraSite || !cred || !cred.atlassianToken) return { completed: [] };
+  let data; try { data = await jiraSearch(detectJql("review", cfg), cfg, cred); } catch { return { completed: [] }; }
+  const completed = [];
+  for (const i of (data.issues || [])) {
+    const key = i.key;
+    const repos = cardRepos(cfg, (i.fields && i.fields.labels) || []);
+    if (!repos.length) continue;
+    let st; try { st = await cardMergeState(repos, key, cred); } catch { continue; }
+    if (st.mergedUrls.length && st.openCount === 0) {   // 모든 PR 병합됨(열린 PR 없음) → 외부 병합 완료
+      try { await transitionToDone(key, cfg, cred); } catch { /* 전환 불가면 라벨/이력만 정리 */ }
+      try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
+      removeCardClones(cfg, key);
+      appendHistory(id, key, "merge", "merged", st.mergedUrls[0], st.mergedBranches[0] || "");
+      completed.push(key);
+    }
+  }
+  return { completed };
+}
+// 외부 병합 동기화(수동 트리거) — project 지정 시 해당 프로젝트, 없으면 전 프로젝트
+app.post("/api/cards/sync-merged", async (req, res) => {
+  try {
+    const pid = req.query.project || (req.body && req.body.project);
+    const ids = pid ? [pid] : listProjects().map((p) => p.id);
+    const completed = [];
+    for (const id of ids) { try { const r = await completeMergedCards(id); r.completed.forEach((k) => completed.push({ project: id, key: k })); } catch {} }
+    res.json({ ok: true, completed });
+  } catch (e) { fail(res, e); }
+});
+
 // 카드의 PR 리뷰 내용(리뷰·PR 코멘트·인라인 코멘트) 조회 — 카드 상세의 '리뷰' 영역에서 표시
 app.get("/api/cards/:key/reviews", async (req, res) => {
   const key = req.params.key;
@@ -862,5 +909,11 @@ app.listen(PORT, () => {
   }
   const st = loopStatus();
   for (const t of ["plan", "build", "review"]) if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
+  // 외부(대시보드 밖) 병합 자동 반영: 주기적으로 await-merge 카드의 PR 병합 여부를 확인해 완료 처리
+  const MERGE_SYNC_MS = 180000; // 3분
+  const syncAll = async () => { for (const p of listProjects()) { try { const r = await completeMergedCards(p.id); if (r.completed.length) console.log(`[merge-sync] ${p.id}: 외부 병합 완료 처리 ${r.completed.join(", ")}`); } catch {} } };
+  setInterval(syncAll, MERGE_SYNC_MS).unref?.();
+  setTimeout(syncAll, 8000).unref?.(); // 부팅 직후 1회
+  console.log(`  외부 병합 자동 동기화: ${MERGE_SYNC_MS / 1000}s 주기`);
   console.log("");
 });
