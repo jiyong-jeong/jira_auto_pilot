@@ -8,7 +8,31 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
-  <style> body { background:#0b1020; } </style>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.9/purify.min.js"></script>
+  <style>
+    body { background:#0b1020; }
+    /* GitHub 유사 마크다운 렌더(다크테마) — PR 리뷰/코멘트 본문 */
+    .md-body { font-size:12px; line-height:1.6; color:#cbd5e1; word-break:break-word; }
+    .md-body > *:first-child { margin-top:0; } .md-body > *:last-child { margin-bottom:0; }
+    .md-body h1,.md-body h2,.md-body h3,.md-body h4,.md-body h5,.md-body h6 { font-weight:600; color:#e2e8f0; margin:.7em 0 .35em; line-height:1.3; }
+    .md-body h1{font-size:1.35em} .md-body h2{font-size:1.2em} .md-body h3{font-size:1.08em} .md-body h4{font-size:1em}
+    .md-body p{margin:.4em 0}
+    .md-body ul,.md-body ol{margin:.4em 0; padding-left:1.4em}
+    .md-body ul{list-style:disc} .md-body ol{list-style:decimal} .md-body li{margin:.15em 0}
+    .md-body code{background:#1e293b; border:1px solid #334155; border-radius:4px; padding:.05em .35em; font-size:.9em; font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+    .md-body pre{background:#0f172a; border:1px solid #334155; border-radius:6px; padding:.6em .8em; overflow:auto; margin:.5em 0}
+    .md-body pre code{background:none; border:none; padding:0; font-size:.85em}
+    .md-body a{color:#818cf8; text-decoration:underline}
+    .md-body blockquote{border-left:3px solid #475569; padding:.1em .8em; margin:.5em 0; color:#94a3b8}
+    .md-body table{border-collapse:collapse; margin:.5em 0; display:block; overflow-x:auto; max-width:100%}
+    .md-body th,.md-body td{border:1px solid #334155; padding:.3em .6em; text-align:left; white-space:nowrap}
+    .md-body th{background:#1e293b; font-weight:600; color:#e2e8f0}
+    .md-body hr{border:none; border-top:1px solid #334155; margin:.8em 0}
+    .md-body img{max-width:100%; border-radius:4px}
+    .md-body sub,.md-body sup{color:#94a3b8; font-size:.8em}
+    .md-body strong{color:#e2e8f0; font-weight:600}
+  </style>
 </head>
 <body>
   <div id="root" class="text-slate-100"></div>
@@ -102,6 +126,17 @@ const resultBadge = {
   "merged": ["병합 완료", "bg-emerald-500/20 text-emerald-300 border-emerald-500/40"],
   "failed": ["실패", "bg-rose-500/20 text-rose-300 border-rose-500/40"],
 };
+
+// 마크다운(GFM) 렌더 — PR 리뷰/코멘트 본문을 GitHub 처럼 표·제목·코드로 표시(DOMPurify 로 정제).
+function Markdown({ text }) {
+  const src = String(text || "");
+  if (typeof window.marked === "undefined" || typeof window.DOMPurify === "undefined") {
+    return <div className="whitespace-pre-wrap text-slate-200">{src}</div>;   // 라이브러리 미로드 시 폴백
+  }
+  let html = window.DOMPurify.sanitize(window.marked.parse(src, { gfm: true, breaks: true }), { ADD_ATTR: ["target"] });
+  html = html.replace(/<a /g, '<a target="_blank" rel="noreferrer" ');   // 링크는 새 탭
+  return <div className="md-body" dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 // ADF 세그먼트(text/image) 렌더 — 카드 이미지는 백엔드 프록시(/api/.../attachment/:id)로 표시
 function RichBody({ segments, fallback, cardKey, pid }) {
@@ -618,23 +653,34 @@ function ProjectCard({ proj, onDeleted, flash }) {
                                             {(pr.reviews.length + pr.comments.length + pr.inline.length) === 0
                                               ? <p className="text-[11px] text-slate-500">리뷰/코멘트 없음</p>
                                               : (
-                                                <div className="space-y-1.5">
+                                                <div className="space-y-2">
                                                   {pr.reviews.map((rv, i) => (
-                                                    <div key={`r${i}`} className="text-[11px]">
-                                                      <span className="text-slate-400">{rv.author}</span> <span className={rv.state === "APPROVED" ? "text-emerald-300" : rv.state === "CHANGES_REQUESTED" ? "text-rose-300" : "text-slate-500"}>{rv.state || "REVIEW"}</span>
-                                                      {rv.body ? <div className="text-slate-200 whitespace-pre-wrap mt-0.5">{rv.body}</div> : null}
+                                                    <div key={`r${i}`} className="rounded border border-slate-700 bg-slate-800/40 overflow-hidden">
+                                                      <div className="flex items-center gap-2 px-2 py-1 bg-slate-800/70 border-b border-slate-700">
+                                                        <span className="text-[11px] font-semibold text-slate-300">{rv.author}</span>
+                                                        <span className={`text-[10px] px-1.5 py-0.5 rounded-full border ${rv.state === "APPROVED" ? "bg-emerald-500/15 text-emerald-300 border-emerald-500/40" : rv.state === "CHANGES_REQUESTED" ? "bg-rose-500/15 text-rose-300 border-rose-500/40" : "bg-slate-600/30 text-slate-400 border-slate-600"}`}>{(rv.state || "REVIEW").replace(/_/g, " ")}</span>
+                                                        <span className="text-[10px] text-slate-500 ml-auto">리뷰</span>
+                                                      </div>
+                                                      {rv.body ? <div className="px-2 py-1.5"><Markdown text={rv.body} /></div> : null}
                                                     </div>
                                                   ))}
                                                   {pr.inline.map((cm, i) => (
-                                                    <div key={`i${i}`} className="text-[11px] border-l-2 border-slate-600 pl-2">
-                                                      <span className="text-slate-400">{cm.author}</span> <span className="text-slate-500 font-mono">{cm.path}{cm.line ? `:${cm.line}` : ""}</span>
-                                                      <div className="text-slate-200 whitespace-pre-wrap">{cm.body}</div>
+                                                    <div key={`i${i}`} className="rounded border border-slate-700 bg-slate-800/40 overflow-hidden">
+                                                      <div className="flex items-center gap-2 px-2 py-1 bg-slate-800/70 border-b border-slate-700">
+                                                        <span className="text-[11px] font-semibold text-slate-300">{cm.author}</span>
+                                                        <span className="text-[10px] text-slate-500 font-mono truncate">{cm.path}{cm.line ? `:${cm.line}` : ""}</span>
+                                                        <span className="text-[10px] text-slate-500 ml-auto whitespace-nowrap">인라인</span>
+                                                      </div>
+                                                      <div className="px-2 py-1.5"><Markdown text={cm.body} /></div>
                                                     </div>
                                                   ))}
                                                   {pr.comments.map((cm, i) => (
-                                                    <div key={`c${i}`} className="text-[11px]">
-                                                      <span className="text-slate-400">💬 {cm.author}</span>
-                                                      <div className="text-slate-200 whitespace-pre-wrap">{cm.body}</div>
+                                                    <div key={`c${i}`} className="rounded border border-slate-700 bg-slate-800/40 overflow-hidden">
+                                                      <div className="flex items-center gap-2 px-2 py-1 bg-slate-800/70 border-b border-slate-700">
+                                                        <span className="text-[11px] font-semibold text-slate-300">💬 {cm.author}</span>
+                                                        <span className="text-[10px] text-slate-500 ml-auto">코멘트</span>
+                                                      </div>
+                                                      <div className="px-2 py-1.5"><Markdown text={cm.body} /></div>
                                                     </div>
                                                   ))}
                                                 </div>
