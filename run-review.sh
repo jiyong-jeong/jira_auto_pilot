@@ -38,6 +38,13 @@ record_history() {  # result pr
   printf '{"ts":"%s","project":"%s","key":"%s","phase":"review","result":"%s","pr":"%s","branch":""}\n' \
     "${ts}" "${PROJECT_ID:-}" "${ISSUE_KEY}" "${result}" "${pr}" >> "${HISTORY_FILE}"
 }
+# Slack 알림 (SLACK_WEBHOOK_URL 미설정 시 스킵)
+notify_slack() {
+  [[ -z "${SLACK_WEBHOOK_URL:-}" ]] && return 0
+  command -v curl >/dev/null 2>&1 || return 0
+  curl -fsS -X POST -H 'Content-type: application/json' \
+    --data "{\"text\":\"$1\"}" "${SLACK_WEBHOOK_URL}" >/dev/null 2>&1 || true
+}
 
 # 동시 실행 방지 락(빌드 락과 별개 — review 전용)
 STATE_DIR="${CLONE_BASE}/.state"; mkdir -p "${STATE_DIR}"
@@ -136,9 +143,11 @@ for OR in "${R_OWNER[@]}"; do
     if printf '%s' "${BODIES2}" | grep -q "${APPROVED_MARKER}"; then
       echo ">> [${ISSUE_KEY}] ${OR}#${N} 리뷰 승인(마커 작성)"
       record_history "approved" "${PR_URL}"
+      notify_slack "✅ [${ISSUE_KEY}] PR 리뷰 승인 · ${OR}#${N} · ${PR_URL}"
     else
       echo ">> [${ISSUE_KEY}] ${OR}#${N} 리뷰 코멘트(미승인 — 다음 주기 재리뷰)"
       record_history "reviewed" "${PR_URL}"
+      notify_slack "📝 [${ISSUE_KEY}] PR 리뷰 코멘트(수정 필요) · ${OR}#${N} · ${PR_URL}"
     fi
   done <<< "${NUMS}"
 done
