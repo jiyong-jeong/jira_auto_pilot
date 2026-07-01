@@ -49,6 +49,7 @@ const DEFAULT_CONFIG = {
   testCmd: "",
   buildCmd: "",
   intervalSeconds: 3600,
+  reviewIntervalSeconds: 3600,   // review 루프 자체 주기(초)
   envMode: "content",
   envPath: "",                                  // 비우면 <workDir>/work-<id>.env 사용
   envDest: "",                                  // repo 내 복사 대상 상대경로(비우면 루트). 예: src/main/resources/application-private.properties
@@ -102,7 +103,7 @@ if (migratedId) console.log(`  마이그레이션: 기존 설정을 프로젝트
 // ----- 실행 중인 루프 프로세스 추적 (pidfile 기반) -----
 // 루프 동작이 바뀌면 이 버전을 올린다. 시작 시 버전이 다른(=구버전) 루프는 자동 재시작.
 const LOOP_VERSION = "2";  // 2: 멀티 프로젝트(run-cycle.js) 순회
-const loops = { plan: null, build: null };
+const loops = { plan: null, build: null, review: null };
 const pidFile = (type) => path.join(SCRIPTS_DIR, `loop-${type}.pid`);
 const verFile = (type) => path.join(SCRIPTS_DIR, `loop-${type}.ver`);
 function readPid(type) {
@@ -172,7 +173,9 @@ function startLoop(type) {
   clearPid(type);
   const script = path.join(SCRIPTS_DIR, `loop-${type}.sh`);
   if (!fs.existsSync(script)) return { ok: false, message: `스크립트를 찾을 수 없습니다: ${script}` };
-  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env: { ...process.env, DASHBOARD_URL: `http://localhost:${PORT}` }, detached: true, stdio: "ignore" });
+  const loopEnv = { ...process.env, DASHBOARD_URL: `http://localhost:${PORT}` };
+  if (type === "review") loopEnv.REVIEW_LOOP_INTERVAL = String(getConfig().reviewIntervalSeconds || getConfig().intervalSeconds || 3600);
+  const proc = spawn("bash", [script], { cwd: SCRIPTS_DIR, env: loopEnv, detached: true, stdio: "ignore" });
   fs.writeFileSync(pidFile(type), String(proc.pid));
   fs.writeFileSync(verFile(type), LOOP_VERSION);   // 버전 마커(구버전 자동 교체 판단용)
   loops[type] = { proc };
@@ -217,7 +220,7 @@ function stopLoop(type) {
 }
 function loopStatus() {
   const out = {};
-  for (const t of ["plan", "build"]) {
+  for (const t of ["plan", "build", "review"]) {
     const pid = readPid(t);
     if (isAlive(pid)) {
       let startedAt = null;
@@ -423,15 +426,15 @@ app.post("/api/credentials", (req, res) => {
 // ----- 루프 제어 -----
 app.get("/api/loops/status", (req, res) => res.json(loopStatus()));
 app.post("/api/loops/:type/start", (req, res) => {
-  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build", "review"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(startLoop(req.params.type));
 });
 app.post("/api/loops/:type/stop", (req, res) => {
-  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build", "review"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(stopLoop(req.params.type));
 });
 app.post("/api/loops/:type/run-once", (req, res) => {
-  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build", "review"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   res.json(runOnce(req.params.type));
 });
 
@@ -554,7 +557,7 @@ app.get("/api/cards/:key/reviews", async (req, res) => {
 
 // REST 탐지
 app.get("/api/detect/:mode", async (req, res) => {
-  if (!["plan", "build"].includes(req.params.mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
+  if (!["plan", "build", "review"].includes(req.params.mode)) return res.status(400).json({ ok: false, message: "mode 오류" });
   try {
     const { cfg, cred } = resolveProject(req);
     const data = await jiraSearch(detectJql(req.params.mode, cfg), cfg, cred);
@@ -564,14 +567,14 @@ app.get("/api/detect/:mode", async (req, res) => {
 
 // 로그
 app.get("/api/logs/:type", (req, res) => {
-  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build", "review"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   const lines = Math.min(parseInt(req.query.lines || "200", 10), 2000);
   const logPath = path.join(SCRIPTS_DIR, `loop-${req.params.type}.log`);
   if (!fs.existsSync(logPath)) return res.json({ log: "(로그 파일 없음 — 아직 실행 전)" });
   res.json({ log: fs.readFileSync(logPath, "utf8").split("\n").slice(-lines).join("\n") });
 });
 app.post("/api/logs/:type/clear", (req, res) => {
-  if (!["plan", "build"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
+  if (!["plan", "build", "review"].includes(req.params.type)) return res.status(400).json({ ok: false, message: "type 오류" });
   try { fs.writeFileSync(path.join(SCRIPTS_DIR, `loop-${req.params.type}.log`), ""); res.json({ ok: true }); }
   catch (e) { fail(res, e); }
 });
@@ -713,7 +716,7 @@ app.post("/api/jira/issue", async (req, res) => {
 // 카드별 claude 실행 로그
 app.get("/api/claude-log/:key/:phase", (req, res) => {
   const { key, phase } = req.params;
-  if (!["plan", "build"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 오류" });
+  if (!["plan", "build", "review"].includes(phase)) return res.status(400).json({ ok: false, message: "phase 오류" });
   if (!/^[A-Z][A-Z0-9]+-[0-9]+$/.test(key)) return res.status(400).json({ ok: false, message: "키 형식 오류" });
   try {
     const { cfg } = resolveProject(req);
@@ -844,7 +847,7 @@ app.listen(PORT, () => {
   console.log(`  스크립트 위치: ${SCRIPTS_DIR}`);
   console.log(`  프로젝트: ${listProjects().length}개`);
   // 구버전 루프 자동 교체: 실행 중이지만 버전 마커가 현재와 다르면(=구버전/마커 없음) 신버전으로 재시작
-  for (const t of ["plan", "build"]) {
+  for (const t of ["plan", "build", "review"]) {
     const pid = readPid(t);
     if (isAlive(pid) && readVer(t) !== LOOP_VERSION) {
       console.log(`  구버전 ${t} 루프(pid ${pid}, ver ${readVer(t) || "없음"}) 감지 → 신버전(v${LOOP_VERSION})으로 재시작`);
@@ -854,6 +857,6 @@ app.listen(PORT, () => {
     }
   }
   const st = loopStatus();
-  for (const t of ["plan", "build"]) if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
+  for (const t of ["plan", "build", "review"]) if (st[t].running) console.log(`  복구: ${t} 루프 실행 중 (pid ${st[t].pid})`);
   console.log("");
 });

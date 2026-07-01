@@ -16,7 +16,7 @@ const SELF = __dirname;
 const DASH = path.join(SELF, "dashboard");
 const lib = require(path.join(DASH, "lib"));
 const phase = process.argv[2];
-if (!["plan", "build"].includes(phase)) { console.error("usage: run-cycle.js <plan|build>"); process.exit(2); }
+if (!["plan", "build", "review"].includes(phase)) { console.error("usage: run-cycle.js <plan|build|review>"); process.exit(2); }
 
 const ts = () => new Date().toISOString().slice(0, 19).replace("T", " ");
 const log = (m) => console.log(`[${ts()}] ${m}`);
@@ -83,7 +83,7 @@ async function fetchLabels(cfg, cred, key) {
 const DEFAULTS = {
   workDir: SELF, baseBranch: "main", triggerMode: "label", triggerLabel: "claude-work", triggerText: "claude-work",
   doneStatus: "DEV COMPLETED", plannedLabel: "claude-planned", answeredLabel: "claude-answered", failedLabel: "claude-failed", prOpenLabel: "claude-pr",
-  maxRetries: 3, maxParallel: 3, intervalSeconds: 3600, envMode: "content", envPath: "", envDest: "", cardEnvDir: "", cloneBase: path.join(SELF, "repos"),
+  maxRetries: 3, maxParallel: 3, intervalSeconds: 3600, reviewIntervalSeconds: 3600, envMode: "content", envPath: "", envDest: "", cardEnvDir: "", cloneBase: path.join(SELF, "repos"),
   testCmd: "", buildCmd: "", repoUrl: "", jiraSite: "", projectKey: "", assigneeEmail: "", assigneeName: "",
 };
 
@@ -148,6 +148,14 @@ async function runCard(key, env, cfg, cred) {
     const cardEnv = resolveCardEnv(cfg, key);   // 카드 전용 env(로컬) 우선
     e.CARD_REPOS = reposToLines(cfg, lib.cardRepos(cfg, await fetchLabels(cfg, cred, key)), cardEnv);
   } catch { /* 기본(전체) 사용 */ }
+  // review: PR 리뷰만 수행(run-review.sh). 이미지/요약 세팅 불필요.
+  if (phase === "review") {
+    return new Promise((resolve) => {
+      const c = spawn("bash", [path.join(SELF, "run-review.sh"), key], { env: e, stdio: "inherit" });
+      c.on("close", () => resolve());
+      c.on("error", () => resolve());
+    });
+  }
   try {
     const imgs = await downloadCardImages(cfg, cred, key);   // 카드 이미지 → Claude Read 인식용
     if (imgs.length) { e.CARD_IMAGES = imgs.join("\n"); log(`[${key}] 카드 이미지 ${imgs.length}장 첨부(추론 인식)`); }

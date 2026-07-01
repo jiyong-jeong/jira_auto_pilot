@@ -85,9 +85,15 @@ function detectJql(mode, cfg) {
   const prLabel = cfg.prOpenLabel || "claude-pr";
   const base = `assignee = currentUser() AND statusCategory != Done${doneName} AND ${triggerClause(cfg)}`;
   if (mode === "plan") return `${base} AND (labels != "${cfg.plannedLabel}" OR labels IS EMPTY)${failed}${proj}`;
+  // review: PR 을 올린(claude-pr) 카드 = 병합 대기 PR. 이 PR 들을 자동 리뷰한다(build 와 상보적).
+  if (mode === "review") return `${base} AND labels = "${prLabel}"${failed}${proj}`;
   // build: PR 을 이미 올린(claude-pr) 카드는 병합 대기 상태이므로 재빌드 대상에서 제외
   return `${base} AND labels = "${cfg.plannedLabel}" AND labels = "${cfg.answeredLabel}" AND (labels != "${prLabel}" OR labels IS EMPTY)${failed}${proj}`;
 }
+
+// PR 리뷰 승인 마커(자기 자신의 PR 은 formal approve 불가 → 이 고유 텍스트 코멘트로 승인 표시).
+// 이 문자열이 PR 코멘트에 존재하면 review 루프는 해당 PR 을 승인 완료로 보고 이후 영구 스킵한다.
+const REVIEW_APPROVED_MARKER = "CLAUDE-REVIEW-APPROVED";
 
 // onMedia(attrs) 를 주면 media/mediaInline 노드를 그 반환값으로 치환(이미지 인라인 표시용). 없으면 무시(기존 동작).
 function adfToText(node, onMedia) {
@@ -277,6 +283,6 @@ function createStore({ projectsPath, credsPath, configPath, credPath, defaultCon
 module.exports = {
   DEFAULT_CREDS, readJson, writeJson, slugify, triggerClause, detectJql,
   adfToText, adfSegments, toADF, mdInline, mdToADF, buildReplyADF, maskCreds, applyCreds, createStore, doneStatusList,
-  REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos,
+  REPO_LABEL_PREFIX, repoNameFromUrl, normalizeRepos, cardRepos, REVIEW_APPROVED_MARKER,
   loadOrCreateEnvKey, encryptEnv, decryptEnv,
 };

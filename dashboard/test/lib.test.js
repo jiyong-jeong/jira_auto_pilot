@@ -35,6 +35,16 @@ test("detectJql: plan/build 게이트 + 제외 필터 + 프로젝트", () => {
   assert.match(build, /\(labels != "F" OR labels IS EMPTY\)/);
 });
 
+test("detectJql: review = claude-pr(PR 올린) 카드 대상", () => {
+  const cfg = { triggerMode: "label", triggerLabel: "cw", doneStatus: "DONE", plannedLabel: "P", answeredLabel: "A", failedLabel: "F", prOpenLabel: "claude-pr", projectKey: "EKYB" };
+  const review = lib.detectJql("review", cfg);
+  assert.match(review, /labels = "claude-pr"/);              // PR 올린 카드만
+  assert.match(review, /statusCategory != Done/);
+  assert.match(review, /labels = "cw"/);                     // 트리거 라벨 유지
+  assert.doesNotMatch(review, /labels = "A"/);               // answered 게이트는 review 에 불필요
+  assert.match(review, /AND project = "EKYB"/);
+});
+
 test("detectJql: 프로젝트 키 없으면 project 필터 없음", () => {
   const jql = lib.detectJql("plan", { triggerMode: "label", triggerLabel: "cw", doneStatus: "D", plannedLabel: "P", failedLabel: "F" });
   assert.doesNotMatch(jql, /project =/);
