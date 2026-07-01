@@ -67,14 +67,24 @@ function Section({ title, children, right, collapsible, defaultOpen = false }) {
   );
 }
 
-function InfoTip({ text }) {
+// 'i' 버튼: 클릭하면 해당 입력 항목 설명 모달을 띄운다(포털로 body 에 렌더).
+function InfoTip({ text, title }) {
+  const [open, setOpen] = useState(false);
+  const modal = open ? ReactDOM.createPortal(
+    <div className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4" onClick={() => setOpen(false)}>
+      <div className="bg-slate-900 border border-slate-700 rounded-xl max-w-md w-full p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-indigo-300">{title || "입력 안내"}</h3>
+          <button onClick={() => setOpen(false)} className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-400 border border-slate-600 hover:text-rose-300 hover:border-rose-500/50 transition">✕</button>
+        </div>
+        <div className="text-sm text-slate-200 leading-relaxed whitespace-pre-line">{text}</div>
+      </div>
+    </div>, document.body) : null;
   return (
-    <span className="relative inline-block ml-1 align-middle group">
-      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-600 text-slate-200 text-[10px] font-bold cursor-help select-none">i</span>
-      <span className="pointer-events-none absolute left-0 bottom-full mb-2 w-72 rounded-lg bg-slate-800 border border-slate-600 px-3 py-2 text-xs leading-relaxed text-slate-200 opacity-0 group-hover:opacity-100 transition-opacity shadow-xl z-50 whitespace-normal">
-        {text}
-        <span className="absolute left-3 top-full border-4 border-transparent border-t-slate-800"></span>
-      </span>
+    <span className="inline-block ml-1 align-middle">
+      <button type="button" title="설명 보기" onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen(true); }}
+        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-slate-600 hover:bg-indigo-500 text-slate-100 text-[10px] font-bold cursor-pointer">i</button>
+      {modal}
     </span>
   );
 }
@@ -82,7 +92,7 @@ function InfoTip({ text }) {
 function Field({ label, value, onChange, type = "text", placeholder, info }) {
   return (
     <label className="block mb-3">
-      <span className="text-sm text-slate-400">{label}{info && <InfoTip text={info} />}</span>
+      <span className="text-sm text-slate-400">{label}{info && <InfoTip text={info} title={label} />}</span>
       <input
         type={type} value={value || ""} placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
@@ -366,29 +376,44 @@ function ProjectCard({ proj, onDeleted, flash }) {
     <Section title={title} collapsible right={<div className="flex gap-2"><Btn onClick={saveConfig}>설정 저장</Btn><Btn color="red" onClick={del}>삭제</Btn></div>}>
       {/* 설정 */}
       <div className="grid grid-cols-2 gap-x-5">
-        <Field label="프로젝트 이름" value={config.name} onChange={(v) => setConfig({ ...config, name: v })} placeholder="표시 이름" />
-        <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net" />
-        <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ" />
-        <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })} />
-        <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })} />
+        <Field label="프로젝트 이름" value={config.name} onChange={(v) => setConfig({ ...config, name: v })} placeholder="표시 이름"
+          info={"대시보드에 표시할 프로젝트 이름입니다.\n\n내부 식별자(id)는 이 이름에서 자동 생성됩니다. 여러 Jira 프로젝트를 각각 등록해 함께 운영할 수 있습니다."} />
+        <Field label="Jira 사이트" value={config.jiraSite} onChange={(v) => setConfig({ ...config, jiraSite: v })} placeholder="xxx.atlassian.net"
+          info={"Atlassian(Jira) 도메인입니다. 예: yourcompany.atlassian.net\n\n앞의 https:// 없이 도메인만 입력하세요. 카드 조회·상태 전환·완료 내역 기록에 사용됩니다."} />
+        <Field label="프로젝트 키 (workspace)" value={config.projectKey} onChange={(v) => setConfig({ ...config, projectKey: v })} placeholder="PROJ"
+          info={"Jira 프로젝트 키입니다. 카드 키의 접두사예요. 예: EKYB, FSIF (카드 EKYB-722의 'EKYB').\n\n지정하면 탐지 JQL에 'project = 키' 필터가 붙어 그 프로젝트 카드만 대상이 됩니다. 비우면 프로젝트 필터 없이 담당자·트리거 조건만으로 탐지합니다."} />
+        <Field label="담당자 이메일" value={config.assigneeEmail} onChange={(v) => setConfig({ ...config, assigneeEmail: v })}
+          info={"자동화 대상 카드의 담당자(assignee) 이메일입니다.\n\nplan/build 프롬프트에서 '이 카드가 담당자에게 할당됐는지' 확인과, 실패 시 담당자 멘션에 사용됩니다. Jira 로그인 이메일과 동일하게 입력하세요."} />
+        <Field label="담당자 이름" value={config.assigneeName} onChange={(v) => setConfig({ ...config, assigneeName: v })}
+          info={"카드 담당자의 표시 이름입니다. 예: 홍길동(Gil-dong)\n\nplan 단계 질문 코멘트·리뷰 반영·실패 코멘트에서 담당자를 멘션/지칭할 때 사용됩니다."} />
         <label className="block mb-3">
-          <span className="text-sm text-slate-400">트리거 방식</span>
+          <span className="text-sm text-slate-400">트리거 방식<InfoTip title="트리거 방식" text={"어떤 신호로 '자동화 대상 카드'를 판정할지 정합니다.\n\n• 라벨(권장): 아래 '트리거 라벨'이 붙은 카드만 대상. 정확하고 안전합니다.\n• 텍스트(레거시): 카드 설명에 '트리거 텍스트'가 포함된 카드를 대상."} /></span>
           <select value={config.triggerMode || "label"} onChange={(e) => setConfig({ ...config, triggerMode: e.target.value })}
             className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
             <option value="label">라벨 (권장)</option><option value="text">텍스트 (레거시)</option>
           </select>
         </label>
         {config.triggerMode === "text"
-          ? <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })} />
-          : <Field label="트리거 라벨" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work" />}
-        <Field label="완료 상태명(쉼표로 복수 지정)" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} placeholder="DEV COMPLETED, Done" />
-        <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })} />
-        <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })} />
-        <Field label="review 주기(초)" type="number" value={config.reviewIntervalSeconds} onChange={(v) => setConfig({ ...config, reviewIntervalSeconds: parseInt(v || "3600", 10) })} placeholder="3600" />
-        <Field label="동시 처리 상한 (병렬)" type="number" value={config.maxParallel} onChange={(v) => setConfig({ ...config, maxParallel: parseInt(v || "3", 10) })} placeholder="3" />
-        <Field label="clone 베이스 폴더" value={config.cloneBase} onChange={(v) => setConfig({ ...config, cloneBase: v })} placeholder="/path/to/repos" />
-        <Field label="테스트 명령 (비우면 자동 감지)" value={config.testCmd} onChange={(v) => setConfig({ ...config, testCmd: v })} placeholder="예: npm test" />
-        <Field label="빌드 명령 (비우면 자동 감지)" value={config.buildCmd} onChange={(v) => setConfig({ ...config, buildCmd: v })} placeholder="예: npm run build" />
+          ? <Field label="트리거 텍스트" value={config.triggerText} onChange={(v) => setConfig({ ...config, triggerText: v })}
+              info={"text 모드에서 자동화 대상을 판정하는 키워드입니다.\n\n카드 설명(본문)에 이 텍스트가 포함되면 대상으로 탐지합니다. 예: claude-work"} />
+          : <Field label="트리거 라벨" value={config.triggerLabel} onChange={(v) => setConfig({ ...config, triggerLabel: v })} placeholder="claude-work"
+              info={"label 모드에서 자동화 대상을 표시하는 Jira 라벨입니다. 기본: claude-work\n\n이 라벨이 붙은 카드만 plan/build 대상으로 탐지합니다. Jira에서 카드에 이 라벨을 달아 자동화를 시작하세요."} />}
+        <Field label="완료 상태명(쉼표로 복수 지정)" value={config.doneStatus} onChange={(v) => setConfig({ ...config, doneStatus: v })} placeholder="DEV COMPLETED, Done"
+          info={"완료로 인식할 Jira 상태명입니다. 쉼표로 여러 개 지정할 수 있어요. 예: DEV COMPLETED, Done, QA COMPLETED\n\n• 전체: 이 상태의 카드는 탐지에서 제외되고 '완료'로 표시됩니다.\n• 첫 번째 값: 대시보드에서 PR 병합 시 카드를 전환할 '주 완료 상태'입니다."} />
+        <Field label="plan 라벨" value={config.plannedLabel} onChange={(v) => setConfig({ ...config, plannedLabel: v })}
+          info={"plan 단계가 끝난 카드에 붙는 라벨입니다. 기본: claude-planned\n\n같은 카드를 plan에서 중복 처리하지 않게 하고, build 진입 게이트(planned+answered)의 한 조건이 됩니다. 보통 기본값 그대로 두세요."} />
+        <Field label="주기(초)" type="number" value={config.intervalSeconds} onChange={(v) => setConfig({ ...config, intervalSeconds: parseInt(v || "3600", 10) })}
+          info={"plan/build 루프의 실행 주기(초)입니다. 기본 3600(1시간).\n\n루프는 이 주기마다 등록된 모든 프로젝트를 순회하며 대상 카드를 탐지·처리합니다."} />
+        <Field label="review 주기(초)" type="number" value={config.reviewIntervalSeconds} onChange={(v) => setConfig({ ...config, reviewIntervalSeconds: parseInt(v || "3600", 10) })} placeholder="3600"
+          info={"review 루프(PR 자동 리뷰)의 실행 주기(초)입니다. 기본 3600.\n\nreview 루프는 자동화가 올린 build PR을 이 주기마다 점검해, 문제없으면 승인 마커 코멘트를 남깁니다."} />
+        <Field label="동시 처리 상한 (병렬)" type="number" value={config.maxParallel} onChange={(v) => setConfig({ ...config, maxParallel: parseInt(v || "3", 10) })} placeholder="3"
+          info={"한 사이클에서 동시에 처리할 카드 수의 상한입니다. 기본 3.\n\n너무 크게 잡으면 API/자원 부담이 커지고, 작게 잡으면 처리 대기가 늘어납니다."} />
+        <Field label="clone 베이스 폴더" value={config.cloneBase} onChange={(v) => setConfig({ ...config, cloneBase: v })} placeholder="/path/to/repos"
+          info={"카드별 repo clone과 실행 상태(.state)가 저장되는 폴더의 절대 경로입니다.\n\n각 repo는 이 아래에 '<repo이름>-<카드키>' 디렉토리로 clone됩니다. 병합 완료 시 해당 clone은 자동 삭제됩니다."} />
+        <Field label="테스트 명령 (비우면 자동 감지)" value={config.testCmd} onChange={(v) => setConfig({ ...config, testCmd: v })} placeholder="예: npm test"
+          info={"PR 생성 전 검증에 사용할 테스트 명령입니다.\n\n비우면 claude가 프로젝트를 보고 자동 감지합니다(go test, npm test, pytest, Makefile의 test 등). 테스트가 통과할 때까지 수정을 반복하고, 통과 후에만 PR을 만듭니다."} />
+        <Field label="빌드 명령 (비우면 자동 감지)" value={config.buildCmd} onChange={(v) => setConfig({ ...config, buildCmd: v })} placeholder="예: npm run build"
+          info={"테스트 수단이 없을 때 대신 시도할 빌드/컴파일 명령입니다.\n\n비우면 자동 감지(npm run build, tsc, go build, make 등). 빌드 수단도 없으면 이 검증 단계는 건너뜁니다."} />
       </div>
       <p className="text-xs text-slate-500 mt-1">PR 전 검증: 테스트가 있으면 통과까지 수정, 없으면 빌드만 시도. 설정 변경 후 "설정 저장".</p>
 
@@ -446,15 +471,15 @@ function ProjectCard({ proj, onDeleted, flash }) {
         </div>
         <div className="grid grid-cols-2 gap-x-5">
           <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."}
-            info="루프 안 claude 인증. 비우면 로컬 claude 로그인 폴백." />
+            info={"루프가 claude를 호출할 때 쓰는 Anthropic API 키(sk-ant-...)입니다.\n\n비우면 로컬 claude 로그인(구독 인증)으로 폴백합니다. 로컬 claude에 이미 로그인돼 있으면 비워도 동작합니다.\n\n토큰은 이 대시보드 밖으로 전송되지 않습니다."} />
           <Field label={`GitHub Token ${credSet("githubToken") ? "✓" : ""}`} type="password" value={credInput.githubToken} onChange={(v) => setCredInput({ ...credInput, githubToken: v })} placeholder={credSet("githubToken") ? "••• 저장됨" : "ghp_..."}
-            info="repo clone/push + PR(gh). 비우면 로컬 gh auth 폴백." />
+            info={"repo clone/push와 PR 생성·병합·리뷰(gh CLI)에 쓰는 GitHub 토큰(ghp_...)입니다.\n\n대상 repo에 대한 'repo' 권한이 필요합니다. 비우면 로컬 gh auth 로그인으로 폴백합니다."} />
           <Field label="Atlassian 이메일" value={credInput.atlassianEmail} onChange={(v) => setCredInput({ ...credInput, atlassianEmail: v })} placeholder="you@company.com"
-            info="Jira REST Basic 인증 계정. 프로젝트마다 다른 사이트/계정 가능." />
+            info={"Jira REST 인증(Basic)에 쓰는 계정 이메일입니다.\n\n아래 Atlassian API Token과 짝으로 사용됩니다. 프로젝트마다 다른 사이트/계정을 쓸 수 있습니다."} />
           <Field label={`Atlassian API Token ${credSet("atlassianToken") ? "✓" : ""}`} type="password" value={credInput.atlassianToken} onChange={(v) => setCredInput({ ...credInput, atlassianToken: v })} placeholder={credSet("atlassianToken") ? "••• 저장됨" : "Atlassian API token"}
-            info="이 프로젝트의 카드 조회·탐지·등록에 쓰는 Jira 토큰. id.atlassian.com 에서 발급." />
+            info={"카드 조회·탐지·등록·완료 처리에 쓰는 Jira API 토큰입니다.\n\nid.atlassian.com/manage-profile/security/api-tokens 에서 발급하세요. 위 Atlassian 이메일과 함께 사용됩니다."} />
           <Field label={`Slack Webhook ${credSet("slackWebhookUrl") ? "✓" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."}
-            info="이 프로젝트의 처리 완료/실패 알림. 비우면 스킵." />
+            info={"처리 완료/실패 알림을 보낼 Slack Incoming Webhook URL입니다(선택).\n\n비우면 알림을 보내지 않습니다."} />
         </div>
       </div>
 
@@ -468,16 +493,17 @@ function ProjectCard({ proj, onDeleted, flash }) {
         {!config.projectKey && <p className="text-amber-300/80 text-sm mb-2">프로젝트 키를 먼저 설정·저장하세요.</p>}
         <div className="grid grid-cols-2 gap-x-5">
           <label className="block mb-3">
-            <span className="text-sm text-slate-400">이슈 타입</span>
+            <span className="text-sm text-slate-400">이슈 타입<InfoTip title="이슈 타입" text={"생성할 Jira 카드의 이슈 타입입니다(작업/스토리/버그/하위작업 등).\n\n'메타 새로고침'으로 이 프로젝트에서 실제 사용 가능한 타입 목록을 불러옵니다. 하위작업(Subtask)을 만들려면 아래 상위 키가 반드시 필요합니다."} /></span>
             <select value={newCard.issueType} onChange={(e) => setNewCard({ ...newCard, issueType: e.target.value })}
               className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
               {jiraMeta.issueTypes.length === 0 && <option value="">(메타 불러오는 중…)</option>}
               {jiraMeta.issueTypes.map((t) => <option key={t.id} value={t.name}>{t.name}{t.subtask ? " (하위)" : ""}</option>)}
             </select>
           </label>
-          <Field label="요약 (필수)" value={newCard.summary} onChange={(v) => setNewCard({ ...newCard, summary: v })} placeholder="카드 제목" />
+          <Field label="요약 (필수)" value={newCard.summary} onChange={(v) => setNewCard({ ...newCard, summary: v })} placeholder="카드 제목"
+            info={"생성할 카드의 제목(summary)입니다. 필수 항목이에요.\n\n작업 내용을 한 줄로 명확히 적으세요. 상세 요구사항은 카드 생성 후 설명·코멘트로 보강할 수 있습니다."} />
           <label className="block mb-3">
-            <span className="text-sm text-slate-400">상위 에픽 (드롭다운)</span>
+            <span className="text-sm text-slate-400">상위 에픽 (드롭다운)<InfoTip title="상위 에픽" text={"이 카드를 소속시킬 상위 에픽을 선택합니다(선택 사항).\n\n'메타 새로고침'으로 프로젝트의 에픽 목록을 불러옵니다. 아래 '상위 키 직접 입력'에 값이 있으면 그쪽이 우선 적용됩니다."} /></span>
             <select value={newCard.epicKey} onChange={(e) => setNewCard({ ...newCard, epicKey: e.target.value })}
               className="mt-1 w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400">
               <option value="">(상위 없음)</option>
@@ -485,7 +511,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
             </select>
           </label>
           <Field label="또는 상위 키 직접 입력 (우선 적용)" value={newCard.parentInput} onChange={(v) => setNewCard({ ...newCard, parentInput: v })} placeholder="예: EKYB-123"
-            info="상위는 자식보다 한 단계 위: 에픽 > 작업/스토리/버그 > 하위작업(Subtask). 버그·작업·스토리 하위에 두려면 이슈 타입을 'Subtask(하위 작업)'으로 선택. 작업/스토리를 두려면 상위는 에픽." />
+            info={"상위 이슈 키를 직접 입력합니다(드롭다운보다 우선 적용).\n\n계층 규칙: 상위는 자식보다 한 단계 위여야 합니다 — 에픽 > 작업/스토리/버그 > 하위작업(Subtask).\n• 버그·작업·스토리를 다른 카드의 하위로 두려면 이슈 타입을 'Subtask(하위 작업)'으로 선택하세요.\n• 작업/스토리를 두려면 상위는 에픽이어야 합니다."} />
         </div>
         <div className="mb-3">
           <div className="flex items-center justify-between mb-1">
