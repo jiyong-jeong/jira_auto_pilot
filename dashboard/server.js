@@ -668,13 +668,15 @@ app.get("/api/cards", async (req, res) => {
     const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
     const data = await jiraSearch(`assignee = currentUser() AND ${triggerClause(cfg)}${proj} ORDER BY key ASC`, cfg, cred);
     const stateDir = path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state");
-    // 처리 중 여부: 카드별 락 존재 + phase 파일. build/plan(<KEY>.lock)·review(<KEY>.review.lock) 둘 다 인식.
+    // 처리 중 여부: 카드별 락 + '살아있는' PID 확인. build/plan(<KEY>.lock)·review(<KEY>.review.lock) 둘 다 인식.
+    // (프로세스가 죽은 스테일 락은 '처리 중'으로 보지 않는다.)
     const procInfo = (key) => {
       for (const suffix of [".lock", ".review.lock"]) {
         const lock = path.join(stateDir, `${key}${suffix}`);
-        if (fs.existsSync(lock)) {
-          try { return fs.readFileSync(`${lock}.phase`, "utf8").trim() || "run"; } catch { return "run"; }
-        }
+        if (!fs.existsSync(lock)) continue;
+        let pid = null; try { pid = parseInt(fs.readFileSync(`${lock}.pid`, "utf8").trim(), 10); } catch {}
+        if (pid && !isAlive(pid)) continue;   // 죽은 프로세스(스테일 락) → 무시
+        try { return fs.readFileSync(`${lock}.phase`, "utf8").trim() || "run"; } catch { return "run"; }
       }
       return null;
     };
@@ -691,8 +693,8 @@ app.get("/api/cards", async (req, res) => {
       const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}` };
       const proc = procInfo(i.key);
       let stage;
-      if (catKey === "done" || doneStatusList(cfg).includes(it.status)) stage = "done"; // 상태 카테고리 Done 이거나 설정 완료 상태명(복수 가능) 일치
-      else if (proc) stage = "processing";                                   // 처리 중(락 존재)
+      if (proc) stage = "processing";                                        // 실행 중(살아있는 락)이면 최우선 → 완료 상태여도 중지 가능
+      else if (catKey === "done" || doneStatusList(cfg).includes(it.status)) stage = "done"; // 상태 카테고리 Done 이거나 설정 완료 상태명(복수 가능) 일치
       else stage = labelStage(it);
       return { ...it, stage, proc };
     });
