@@ -247,6 +247,8 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [cardsErr, setCardsErr] = useState("");
   const [expandedKey, setExpandedKey] = useState("");
   const [cardPage, setCardPage] = useState(0);   // 카드 상태 페이지네이션(최신 작성 먼저)
+  const [cardQuery, setCardQuery] = useState(""); // 카드 검색(티켓 이름/번호/상태)
+  const [cardHistory, setCardHistory] = useState(null);  // 펼친 카드의 작업 이력 { key, entries }
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [reply, setReply] = useState("");
@@ -324,9 +326,10 @@ function ProjectCard({ proj, onDeleted, flash }) {
   };
   const loadCards = async () => { const r = await api.get(withP("/api/cards")); if (r.ok) { setCards(r.issues); setCardsErr(""); } else setCardsErr(r.message || "조회 실패"); };
   const toggleCard = async (key) => {
-    if (expandedKey === key) { setExpandedKey(""); setDetail(null); return; }
-    setExpandedKey(key); setDetail(null); setReply(""); setReplyAnswered(true); setReplyTarget(null); setClaudeLog(null); setDetailLoading(true);
+    if (expandedKey === key) { setExpandedKey(""); setDetail(null); setCardHistory(null); return; }
+    setExpandedKey(key); setDetail(null); setCardHistory(null); setReply(""); setReplyAnswered(true); setReplyTarget(null); setClaudeLog(null); setDetailLoading(true);
     const r = await api.get(withP(`/api/jira/issue/${key}`)); setDetailLoading(false); setDetail(r.ok ? r : { error: r.message || "조회 실패" });
+    try { const h = await api.get(withP(`/api/history?limit=1000`)); setCardHistory({ key, entries: h.ok ? (h.entries || []).filter((e) => e.key === key) : [] }); } catch { setCardHistory({ key, entries: [] }); }
   };
   const postReply = async () => {
     if (!reply.trim()) { flash("답변 내용을 입력하세요"); return; }
@@ -588,14 +591,22 @@ function ProjectCard({ proj, onDeleted, flash }) {
           <Btn color="slate" onClick={loadCards}>조회</Btn>
         </div>
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
+        {cards.length > 0 && (
+          <input value={cardQuery} onChange={(e) => { setCardQuery(e.target.value); setCardPage(0); }} spellCheck={false}
+            placeholder="검색: 티켓 이름 · 번호(키) · 상태"
+            className="w-full mb-2 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+        )}
         {cards.length === 0 ? (
           <p className="text-slate-500 text-sm">조회 버튼을 눌러 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
         ) : (() => {
+          const q = cardQuery.trim().toLowerCase();
+          const filtered = q ? cards.filter((c) => c.key.toLowerCase().includes(q) || (c.summary || "").toLowerCase().includes(q) || (c.status || "").toLowerCase().includes(q)) : cards;
+          if (filtered.length === 0) return <p className="text-slate-500 text-sm">검색 결과가 없습니다 (‘{cardQuery}’).</p>;
           const CARD_PAGE_SIZE = 10;
-          const totalCardPages = Math.max(1, Math.ceil(cards.length / CARD_PAGE_SIZE));
-          const cpage = Math.min(cardPage, totalCardPages - 1);   // 갱신으로 건수 변해도 안전 클램프
+          const totalCardPages = Math.max(1, Math.ceil(filtered.length / CARD_PAGE_SIZE));
+          const cpage = Math.min(cardPage, totalCardPages - 1);   // 갱신/검색으로 건수 변해도 안전 클램프
           const cstart = cpage * CARD_PAGE_SIZE;
-          const pageCards = cards.slice(cstart, cstart + CARD_PAGE_SIZE);   // 최신 작성 먼저(서버 created DESC)
+          const pageCards = filtered.slice(cstart, cstart + CARD_PAGE_SIZE);   // 최신 작성 먼저(서버 created DESC)
           const CardPgBtn = ({ disabled, onClick, children }) => (
             <button onClick={onClick} disabled={disabled}
               className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:border-indigo-500/50 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition">{children}</button>
@@ -603,7 +614,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
           return (
           <React.Fragment>
           <table className="w-full text-sm table-fixed">
-            <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2 w-28">키</th><th>요약</th><th className="w-40">상태</th><th className="w-36">단계</th></tr></thead>
+            <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2 w-28">키(번호)</th><th>티켓 이름</th><th className="w-40">상태</th><th className="w-36">단계</th></tr></thead>
             <tbody>
               {pageCards.map((c) => {
                 const [baseLabel, cls] = stageBadge[c.stage] || ["-", ""];
@@ -658,6 +669,38 @@ function ProjectCard({ proj, onDeleted, flash }) {
                                 <pre className="bg-black/60 border border-slate-700 rounded p-3 text-xs whitespace-pre-wrap text-slate-200 h-72 overflow-auto">{claudeLog.text || "(로그 없음)"}</pre>
                               </div>
                             )}
+                            {/* ===== 🕘 작업 이력 (이 카드) ===== */}
+                            <div className="mb-4 rounded-lg border border-slate-600/50 bg-slate-700/10">
+                              <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-600/40 bg-slate-700/20 rounded-t-lg">
+                                <span className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">🕘 작업 이력</span>
+                                <span className="text-[11px] text-slate-500">이 카드의 plan·build·review·merge 처리 내역</span>
+                              </div>
+                              <div className="p-3">
+                                {!(cardHistory && cardHistory.key === c.key) ? <p className="text-[11px] text-slate-500">불러오는 중…</p>
+                                  : cardHistory.entries.length === 0 ? <p className="text-[11px] text-slate-500">아직 처리 이력이 없습니다.</p>
+                                  : (
+                                    <div className="max-h-56 overflow-auto">
+                                      <table className="w-full text-xs">
+                                        <thead><tr className="text-slate-500 text-left border-b border-slate-700"><th className="py-1">시각</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
+                                        <tbody>
+                                          {cardHistory.entries.map((h, i) => {
+                                            const [hl, hc] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
+                                            return (
+                                              <tr key={i} className="border-b border-slate-800/70">
+                                                <td className="py-1 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
+                                                <td className="text-slate-300">{h.phase}</td>
+                                                <td><span className={`inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded-full border ${hc}`}>{hl}</span></td>
+                                                <td>{h.pr ? <a href={h.pr} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
+                                                <td className="text-slate-400 font-mono text-[10px] truncate">{h.branch || "-"}</td>
+                                              </tr>
+                                            );
+                                          })}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  )}
+                              </div>
+                            </div>
                             {/* ===== 📋 Jira 카드 영역 (설명·코멘트·답변) ===== */}
                             <div className="mb-4 rounded-lg border border-sky-500/30 bg-sky-500/[0.04]">
                               <div className="flex items-center gap-2 px-3 py-2 border-b border-sky-500/20 bg-sky-500/10 rounded-t-lg">
@@ -816,7 +859,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
             </tbody>
           </table>
           <div className="flex items-center justify-between mt-3 text-xs text-slate-400">
-            <span>총 {cards.length}건 · {cstart + 1}–{Math.min(cstart + CARD_PAGE_SIZE, cards.length)} (최신 작성 먼저)</span>
+            <span>{q ? `검색 ${filtered.length}건` : `총 ${filtered.length}건`} · {cstart + 1}–{Math.min(cstart + CARD_PAGE_SIZE, filtered.length)} (최신 작성 먼저)</span>
             <div className="flex items-center gap-1">
               <CardPgBtn disabled={cpage <= 0} onClick={() => setCardPage(0)}>« 처음</CardPgBtn>
               <CardPgBtn disabled={cpage <= 0} onClick={() => setCardPage(cpage - 1)}>‹ 이전</CardPgBtn>
