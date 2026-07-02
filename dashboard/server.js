@@ -59,7 +59,7 @@ const DEFAULT_CONFIG = {
 
 // ----- 순수 로직 + 프로젝트 스토어 (단위 테스트 대상은 lib.js 로 분리) -----
 const lib = require("./lib");
-const { slugify, triggerClause, detectJql, adfToText, adfSegments, toADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX, doneStatusList } = lib;
+const { slugify, triggerClause, detectJql, adfToText, adfSegments, toADF, mdToADF, buildReplyADF, maskCreds, applyCreds, normalizeRepos, cardRepos, REPO_LABEL_PREFIX, doneStatusList } = lib;
 // repo 별 env 파일 경로(repo 전용 env 만 사용; 없으면 미복사 — run-jira 가 -f 로 확인)
 function repoEnvFile(cfg, repoName) { return path.join(cfg.workDir || SCRIPTS_DIR, `work-${cfg.id}-${repoName}.env`); }
 function repoEnvSrc(cfg, repoName) { return repoEnvFile(cfg, repoName); }
@@ -526,13 +526,40 @@ async function listCardPRs(repos, key, cred) {
   }
   return out;
 }
-// 카드 완료 확정(공통): 상태 전환 + prOpen 라벨 제거 + clone 정리 + 이력 기록
-async function finalizeCardDone(id, cfg, cred, key, mergedUrls, branches, errors) {
+// 완료 내역을 카드 설명 ADF 맨 아래에 안전 append(기존 노드·이미지 보존, 기존 '완료 내역' 섹션은 교체).
+// append-summary.js 와 동일한 방식 — 머지 시점에 최종 내용으로 갱신하기 위해 서버에서 직접 수행.
+async function appendCompletionSummary(cfg, cred, key, markdown) {
+  const HEADING = "완료 내역";
+  const issue = await jiraReq("GET", `/rest/api/3/issue/${encodeURIComponent(key)}?fields=description`, null, cfg, cred);
+  const adf = (issue.fields && issue.fields.description) || { type: "doc", version: 1, content: [] };
+  if (!Array.isArray(adf.content)) adf.content = [];
+  const idx = adf.content.findIndex((n) => n && n.type === "heading" && adfToText(n).trim() === HEADING);
+  if (idx !== -1) { let cut = idx; if (cut > 0 && adf.content[cut - 1] && adf.content[cut - 1].type === "rule") cut -= 1; adf.content = adf.content.slice(0, cut); }
+  adf.content.push({ type: "rule" });
+  adf.content.push({ type: "heading", attrs: { level: 2 }, content: [{ type: "text", text: HEADING }] });
+  adf.content.push(...mdToADF(markdown).content);
+  await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { fields: { description: adf } }, cfg, cred);
+}
+// 머지된 PR 들의 최종 본문으로 완료 내역 markdown 구성(PR 본문은 rework 시 갱신되므로 최종 반영 내용).
+async function buildMergeSummaryMd(mergedPRs, cred) {
+  const parts = [];
+  for (const pr of mergedPRs) {
+    let body = "", title = "";
+    try { const v = await gh(["pr", "view", String(pr.number), "--repo", pr.owner, "--json", "title,body"], cred); const d = JSON.parse(v.stdout || "{}"); body = (d.body || "").trim(); title = d.title || ""; } catch {}
+    parts.push(`### ${pr.owner}#${pr.number}${title ? ` — ${title}` : ""}\n\n${body || "(PR 본문 없음)"}\n\n- PR: ${pr.url}\n- 브랜치: ${pr.branch || "-"}`);
+  }
+  const stamp = new Date().toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  return `PR 병합으로 최종 반영된 내용입니다(머지 시점 기준).\n\n${parts.join("\n\n---\n\n")}\n\n- 병합 완료 일시: ${stamp}`;
+}
+// 카드 완료 확정(공통): 상태 전환 + prOpen 라벨 제거 + clone 정리 + 이력 기록 + '완료 내역'을 최종 머지 내용으로 갱신
+async function finalizeCardDone(id, cfg, cred, key, mergedPRs, errors) {
   let doneStatus = null;
   try { doneStatus = await transitionToDone(key, cfg, cred); } catch (e) { if (errors) errors.push(`상태전환: ${e.message}`); }
   try { await jiraReq("PUT", `/rest/api/3/issue/${encodeURIComponent(key)}`, { update: { labels: [{ remove: cfg.prOpenLabel || "claude-pr" }] } }, cfg, cred); } catch {}
+  // 머지 시점에 최종 PR 본문으로 완료 내역 갱신(리뷰/rework 로 바뀐 최종 내용 반영, 이미지 보존)
+  try { await appendCompletionSummary(cfg, cred, key, await buildMergeSummaryMd(mergedPRs, cred)); } catch (e) { if (errors) errors.push(`완료 내역 갱신: ${e.message}`); }
   const rc = removeCardClones(cfg, key);
-  appendHistory(id, key, "merge", "merged", mergedUrls[0] || "", branches[0] || "");
+  appendHistory(id, key, "merge", "merged", (mergedPRs[0] && mergedPRs[0].url) || "", (mergedPRs[0] && mergedPRs[0].branch) || "");
   return { doneStatus, removed: rc.removed };
 }
 // 자동화(봇) PR 이 모두 병합됐으면(열린 봇 PR 0 · 병합 봇 PR ≥1) 카드 완료. 사람 PR 은 완료 판정에서 제외.
@@ -541,7 +568,7 @@ async function maybeFinalizeCard(id, cfg, cred, key, repos, botLogin) {
   const openBot = bot.filter((p) => p.state === "OPEN");
   const mergedBot = bot.filter((p) => p.state === "MERGED");
   if (mergedBot.length && openBot.length === 0) {
-    const fin = await finalizeCardDone(id, cfg, cred, key, mergedBot.map((p) => p.url), mergedBot.map((p) => p.branch), []);
+    const fin = await finalizeCardDone(id, cfg, cred, key, mergedBot, []);
     return { finalized: true, ...fin };
   }
   return { finalized: false };
