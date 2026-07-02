@@ -666,7 +666,7 @@ app.get("/api/cards", async (req, res) => {
   try {
     const { cfg, cred } = resolveProject(req);
     const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
-    const data = await jiraSearch(`assignee = currentUser() AND ${triggerClause(cfg)}${proj} ORDER BY key ASC`, cfg, cred);
+    const data = await jiraSearch(`assignee = currentUser() AND ${triggerClause(cfg)}${proj} ORDER BY created DESC`, cfg, cred);
     const stateDir = path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state");
     // 처리 중 여부: 카드별 락 + '살아있는' PID 확인. build/plan(<KEY>.lock)·review(<KEY>.review.lock) 둘 다 인식.
     // (프로세스가 죽은 스테일 락은 '처리 중'으로 보지 않는다.)

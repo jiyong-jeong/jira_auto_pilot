@@ -246,6 +246,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
   const [cards, setCards] = useState([]);
   const [cardsErr, setCardsErr] = useState("");
   const [expandedKey, setExpandedKey] = useState("");
+  const [cardPage, setCardPage] = useState(0);   // 카드 상태 페이지네이션(최신 작성 먼저)
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [reply, setReply] = useState("");
@@ -589,11 +590,22 @@ function ProjectCard({ proj, onDeleted, flash }) {
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
         {cards.length === 0 ? (
           <p className="text-slate-500 text-sm">조회 버튼을 눌러 카드 상태를 확인하세요. (Atlassian 자격증명 필요)</p>
-        ) : (
+        ) : (() => {
+          const CARD_PAGE_SIZE = 10;
+          const totalCardPages = Math.max(1, Math.ceil(cards.length / CARD_PAGE_SIZE));
+          const cpage = Math.min(cardPage, totalCardPages - 1);   // 갱신으로 건수 변해도 안전 클램프
+          const cstart = cpage * CARD_PAGE_SIZE;
+          const pageCards = cards.slice(cstart, cstart + CARD_PAGE_SIZE);   // 최신 작성 먼저(서버 created DESC)
+          const CardPgBtn = ({ disabled, onClick, children }) => (
+            <button onClick={onClick} disabled={disabled}
+              className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:border-indigo-500/50 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition">{children}</button>
+          );
+          return (
+          <React.Fragment>
           <table className="w-full text-sm table-fixed">
             <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2 w-28">키</th><th>요약</th><th className="w-40">상태</th><th className="w-36">단계</th></tr></thead>
             <tbody>
-              {cards.map((c) => {
+              {pageCards.map((c) => {
                 const [baseLabel, cls] = stageBadge[c.stage] || ["-", ""];
                 const label = (c.stage === "processing" && c.proc) ? `처리 중(${c.proc})` : baseLabel;
                 const open = expandedKey === c.key;
@@ -803,7 +815,19 @@ function ProjectCard({ proj, onDeleted, flash }) {
               })}
             </tbody>
           </table>
-        )}
+          <div className="flex items-center justify-between mt-3 text-xs text-slate-400">
+            <span>총 {cards.length}건 · {cstart + 1}–{Math.min(cstart + CARD_PAGE_SIZE, cards.length)} (최신 작성 먼저)</span>
+            <div className="flex items-center gap-1">
+              <CardPgBtn disabled={cpage <= 0} onClick={() => setCardPage(0)}>« 처음</CardPgBtn>
+              <CardPgBtn disabled={cpage <= 0} onClick={() => setCardPage(cpage - 1)}>‹ 이전</CardPgBtn>
+              <span className="px-2 text-slate-300">{cpage + 1} / {totalCardPages}</span>
+              <CardPgBtn disabled={cpage >= totalCardPages - 1} onClick={() => setCardPage(cpage + 1)}>다음 ›</CardPgBtn>
+              <CardPgBtn disabled={cpage >= totalCardPages - 1} onClick={() => setCardPage(totalCardPages - 1)}>마지막 »</CardPgBtn>
+            </div>
+          </div>
+          </React.Fragment>
+          );
+        })()}
       </div>
     </Section>
   );
