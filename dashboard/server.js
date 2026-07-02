@@ -878,7 +878,29 @@ app.post("/api/jira/issue/:key/comment", async (req, res) => {
 });
 
 // 처리 이력 (?project 로 필터 가능)
-app.get("/api/history", (req, res) => {
+// 키→티켓 제목 캐시(이력에 제목 열 표시용). 제목은 거의 안 변하므로 영속 캐시 → 4초 폴링 시 재조회 없음.
+const summaryCache = new Map();
+async function enrichSummaries(entries) {
+  const byProject = new Map();   // project → 조회 필요한 키 Set
+  for (const e of entries) {
+    if (!e.key || !e.project || summaryCache.has(e.key)) continue;
+    if (!byProject.has(e.project)) byProject.set(e.project, new Set());
+    byProject.get(e.project).add(e.key);
+  }
+  for (const [pid, keySet] of byProject) {
+    const cfg = getConfig(pid), cred = getCreds(pid);
+    if (!cfg.jiraSite || !cred || !cred.atlassianToken) continue;
+    const keys = [...keySet].filter((k) => /^[A-Z][A-Z0-9]+-[0-9]+$/.test(k)).slice(0, 50);
+    if (!keys.length) continue;
+    try {
+      const data = await jiraSearch(`key IN (${keys.join(",")})`, cfg, cred);
+      for (const i of (data.issues || [])) summaryCache.set(i.key, (i.fields && i.fields.summary) || "");
+    } catch {}
+    for (const k of keys) if (!summaryCache.has(k)) summaryCache.set(k, "");   // 실패/누락 키 빈값 캐시(반복 조회 방지)
+  }
+  return entries.map((e) => ({ ...e, summary: summaryCache.get(e.key) || "" }));
+}
+app.get("/api/history", async (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || "100", 10), 1000);
   const filter = req.query.project;
   if (!fs.existsSync(HISTORY_PATH)) return res.json({ ok: true, entries: [] });
@@ -886,7 +908,10 @@ app.get("/api/history", (req, res) => {
   for (const ln of fs.readFileSync(HISTORY_PATH, "utf8").split("\n").filter(Boolean)) {
     try { const e = JSON.parse(ln); if (!filter || e.project === filter) entries.push(e); } catch {}
   }
-  res.json({ ok: true, entries: entries.reverse().slice(0, limit) });
+  const sliced = entries.reverse().slice(0, limit);
+  let out = sliced;
+  try { out = await enrichSummaries(sliced); } catch { /* 제목 보강 실패해도 이력은 반환 */ }
+  res.json({ ok: true, entries: out });
 });
 
 // env (프로젝트별 경로)

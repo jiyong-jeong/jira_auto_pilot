@@ -883,12 +883,21 @@ function App() {
   const [logs, setLogs] = useState({ plan: "", build: "" });
   const [history, setHistory] = useState([]);
   const [histPage, setHistPage] = useState(0);
+  const [histQuery, setHistQuery] = useState("");       // 처리 이력 검색(티켓 이름/번호/프로젝트)
+  const [histExpanded, setHistExpanded] = useState(""); // 펼친 이력 행 id
+  const [histDetail, setHistDetail] = useState(null);   // 펼친 행의 티켓 내용 { key, loading, detail }
   const [toast, setToast] = useState("");
   const [infoOpen, setInfoOpen] = useState(false);
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 2500); };
 
   const loadProjects = async () => { const r = await api.get("/api/projects"); setProjects(r.projects || []); };
   const loadHistory = async () => { const r = await api.get("/api/history?limit=100"); if (r.ok) setHistory(r.entries || []); };
+  const toggleHist = async (rowId, key, project) => {
+    if (histExpanded === rowId) { setHistExpanded(""); setHistDetail(null); return; }
+    setHistExpanded(rowId); setHistDetail({ key, loading: true, detail: null });
+    const r = await api.get(`/api/jira/issue/${key}?project=${encodeURIComponent(project || "")}`);
+    setHistDetail((p) => (p && p.key === key) ? { key, loading: false, detail: r.ok ? r : { error: r.message || "조회 실패" } } : p);
+  };
   useEffect(() => { loadProjects(); loadHistory(); api.get("/api/loops/status").then(setStatus); }, []);
   useEffect(() => {
     const t = setInterval(async () => {
@@ -950,37 +959,95 @@ function App() {
       {/* 처리 이력 (전역) — 페이지네이션 */}
       <Section title="처리 이력 (전 프로젝트)" collapsible defaultOpen right={<Btn color="slate" onClick={loadHistory}>새로고침</Btn>}>
         {history.length === 0 ? <p className="text-slate-500 text-sm">아직 처리 이력이 없습니다.</p> : (() => {
+          const q = histQuery.trim().toLowerCase();
+          const filtered = q ? history.filter((h) => (h.key || "").toLowerCase().includes(q) || (h.summary || "").toLowerCase().includes(q) || (h.project || "").toLowerCase().includes(q)) : history;
           const PAGE_SIZE = 10;
-          const totalPages = Math.max(1, Math.ceil(history.length / PAGE_SIZE));
-          const page = Math.min(histPage, totalPages - 1);   // 이력이 줄어도 안전하게 클램프
+          const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+          const page = Math.min(histPage, totalPages - 1);   // 검색/갱신으로 건수 변해도 안전 클램프
           const start = page * PAGE_SIZE;
-          const pageRows = history.slice(start, start + PAGE_SIZE);
+          const pageRows = filtered.slice(start, start + PAGE_SIZE);
           const PgBtn = ({ disabled, onClick, children }) => (
             <button onClick={onClick} disabled={disabled}
               className="text-xs px-2 py-1 rounded border border-slate-600 text-slate-300 hover:border-indigo-500/50 hover:text-indigo-300 disabled:opacity-40 disabled:cursor-not-allowed transition">{children}</button>
           );
           return (
             <React.Fragment>
+              <input value={histQuery} onChange={(e) => { setHistQuery(e.target.value); setHistPage(0); }} spellCheck={false}
+                placeholder="검색: 티켓 이름 · 번호(키) · 프로젝트"
+                className="w-full mb-2 bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-400" />
+              {filtered.length === 0 ? <p className="text-slate-500 text-sm">검색 결과가 없습니다 (‘{histQuery}’).</p> : (
+              <React.Fragment>
               <table className="w-full text-sm">
-                <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">시각</th><th>프로젝트</th><th>키</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
+                <thead><tr className="text-slate-400 text-left border-b border-slate-700"><th className="py-2">시각</th><th>프로젝트</th><th>키(번호)</th><th>티켓 이름</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
                 <tbody>
                   {pageRows.map((h, i) => {
                     const [label, cls] = resultBadge[h.result] || [h.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
+                    const rowId = `${h.ts}-${h.key}-${h.phase}-${start + i}`;
+                    const open = histExpanded === rowId;
+                    const cardHist = history.filter((e) => e.key === h.key);   // 이 카드의 전체 작업 이력
                     return (
-                      <tr key={`${h.ts}-${h.key}-${h.phase}-${start + i}`} className="border-b border-slate-800">
-                        <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
-                        <td className="text-slate-400">{h.project || "-"}</td>
-                        <td className="text-slate-200">{h.key}</td><td className="text-slate-300">{h.phase}</td>
-                        <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
-                        <td>{h.pr ? <a href={h.pr} target="_blank" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
-                        <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
-                      </tr>
+                      <React.Fragment key={rowId}>
+                        <tr className="border-b border-slate-800 hover:bg-slate-800/40 cursor-pointer" onClick={() => toggleHist(rowId, h.key, h.project)}>
+                          <td className="py-2 text-slate-400 whitespace-nowrap">{h.ts ? new Date(h.ts).toLocaleString() : "-"}</td>
+                          <td className="text-slate-400">{h.project || "-"}</td>
+                          <td className="text-slate-200 whitespace-nowrap"><span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span>{h.key}</td>
+                          <td className="text-slate-300 break-words">{h.summary || "-"}</td>
+                          <td className="text-slate-300">{h.phase}</td>
+                          <td><span className={`inline-block whitespace-nowrap text-xs px-2 py-1 rounded-full border ${cls}`}>{label}</span></td>
+                          <td>{h.pr ? <a href={h.pr} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
+                          <td className="text-slate-400 font-mono text-xs">{h.branch || "-"}</td>
+                        </tr>
+                        {open && (
+                          <tr className="border-b border-slate-800 bg-slate-900/50"><td colSpan={8} className="p-3">
+                            {/* 작업 이력(이 카드) */}
+                            <div className="mb-3">
+                              <div className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">🕘 작업 이력 — {h.key}{h.summary ? ` · ${h.summary}` : ""}</div>
+                              <table className="w-full text-xs">
+                                <thead><tr className="text-slate-500 text-left border-b border-slate-700"><th className="py-1">시각</th><th>단계</th><th>결과</th><th>PR</th><th>브랜치</th></tr></thead>
+                                <tbody>
+                                  {cardHist.map((e, j) => {
+                                    const [el, ec] = resultBadge[e.result] || [e.result || "-", "bg-slate-600/30 text-slate-300 border-slate-600"];
+                                    return (
+                                      <tr key={j} className="border-b border-slate-800/70">
+                                        <td className="py-1 text-slate-400 whitespace-nowrap">{e.ts ? new Date(e.ts).toLocaleString() : "-"}</td>
+                                        <td className="text-slate-300">{e.phase}</td>
+                                        <td><span className={`inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded-full border ${ec}`}>{el}</span></td>
+                                        <td>{e.pr ? <a href={e.pr} target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">PR</a> : <span className="text-slate-600">-</span>}</td>
+                                        <td className="text-slate-400 font-mono text-[10px] truncate">{e.branch || "-"}</td>
+                                      </tr>
+                                    );
+                                  })}
+                                </tbody>
+                              </table>
+                            </div>
+                            {/* 티켓 내용 */}
+                            <div className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">📋 티켓 내용</div>
+                            {!(histDetail && histDetail.key === h.key) || histDetail.loading ? <p className="text-[11px] text-slate-500">불러오는 중…</p>
+                              : histDetail.detail && histDetail.detail.error ? <p className="text-[11px] text-rose-300">{histDetail.detail.error}</p>
+                              : histDetail.detail ? (
+                                <div>
+                                  <div className="bg-black/40 border border-slate-700 rounded p-3 text-xs text-slate-200 mb-2 max-h-72 overflow-auto"><RichBody segments={histDetail.detail.descriptionSegments} fallback={histDetail.detail.description || "(설명 없음)"} cardKey={h.key} pid={h.project} /></div>
+                                  <div className="text-[11px] text-slate-400 mb-1">코멘트 ({(histDetail.detail.comments || []).length})</div>
+                                  <div className="space-y-2 max-h-60 overflow-auto">
+                                    {(histDetail.detail.comments || []).length === 0 ? <p className="text-slate-500 text-[11px]">코멘트 없음</p> : histDetail.detail.comments.map((cm, k) => (
+                                      <div key={k} className="bg-slate-800/60 border border-slate-700 rounded p-2">
+                                        <div className="text-[11px] text-slate-400 mb-0.5">{cm.author} · {cm.created ? new Date(cm.created).toLocaleString() : ""}</div>
+                                        <div className="text-xs text-slate-200"><RichBody segments={cm.bodySegments} fallback={cm.body} cardKey={h.key} pid={h.project} /></div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  <a href={histDetail.detail.url} target="_blank" rel="noreferrer" className="inline-block mt-2 text-[11px] text-indigo-400 hover:underline">Jira에서 열기 ↗</a>
+                                </div>
+                              ) : null}
+                          </td></tr>
+                        )}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
               </table>
               <div className="flex items-center justify-between mt-3 text-xs text-slate-400">
-                <span>총 {history.length}건 · {start + 1}–{Math.min(start + PAGE_SIZE, history.length)}</span>
+                <span>{q ? `검색 ${filtered.length}건` : `총 ${filtered.length}건`} · {start + 1}–{Math.min(start + PAGE_SIZE, filtered.length)}</span>
                 <div className="flex items-center gap-1">
                   <PgBtn disabled={page <= 0} onClick={() => setHistPage(0)}>« 처음</PgBtn>
                   <PgBtn disabled={page <= 0} onClick={() => setHistPage(page - 1)}>‹ 이전</PgBtn>
@@ -989,6 +1056,8 @@ function App() {
                   <PgBtn disabled={page >= totalPages - 1} onClick={() => setHistPage(totalPages - 1)}>마지막 »</PgBtn>
                 </div>
               </div>
+              </React.Fragment>
+              )}
             </React.Fragment>
           );
         })()}
