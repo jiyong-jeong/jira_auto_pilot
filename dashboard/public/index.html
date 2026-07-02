@@ -89,6 +89,22 @@ function InfoTip({ text, title }) {
   );
 }
 
+// 프로젝트 카드 내부의 접이식 하위 영역(기본 접힘). 헤더 클릭으로 토글, 우측 액션(right)은 펼쳤을 때만.
+function SubSection({ title, right, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="mt-3 pt-3 border-t border-slate-700/70">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-slate-300 cursor-pointer select-none inline-flex items-center gap-1" onClick={() => setOpen((o) => !o)}>
+          <span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span>{title}
+        </span>
+        {open && right}
+      </div>
+      {open && <div className="mt-2">{children}</div>}
+    </div>
+  );
+}
+
 function Field({ label, value, onChange, type = "text", placeholder, info }) {
   return (
     <label className="block mb-3">
@@ -398,6 +414,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
   return (
     <Section title={title} collapsible right={<div className="flex gap-2"><Btn onClick={saveConfig}>설정 저장</Btn><Btn color="red" onClick={del}>삭제</Btn></div>}>
       {/* 설정 */}
+      <SubSection title="설정">
       <div className="grid grid-cols-2 gap-x-5">
         <Field label="프로젝트 이름" value={config.name} onChange={(v) => setConfig({ ...config, name: v })} placeholder="표시 이름"
           info={"대시보드에 표시할 프로젝트 이름입니다.\n\n내부 식별자(id)는 이 이름에서 자동 생성됩니다. 여러 Jira 프로젝트를 각각 등록해 함께 운영할 수 있습니다."} />
@@ -485,13 +502,10 @@ function ProjectCard({ proj, onDeleted, flash }) {
         })}
         <p className="text-xs text-slate-500 mt-1">name 은 카드 라벨(repo_&lt;name&gt;)에 쓰이니 짧은 슬러그 권장. repo 마다 'env 대상경로'와 'env' 내용을 따로 지정 가능. env 우선순위: 카드 전용(card-envs/&lt;KEY&gt;.env) &gt; repo 전용.</p>
       </div>
+      </SubSection>
 
       {/* 자격증명 (프로젝트별) */}
-      <div className="mt-4 pt-4 border-t border-slate-700">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-300">자격증명 (이 프로젝트 전용)</span>
-          <Btn onClick={saveCreds}>자격증명 저장</Btn>
-        </div>
+      <SubSection title="자격증명 (이 프로젝트 전용)" right={<Btn onClick={saveCreds}>자격증명 저장</Btn>}>
         <div className="grid grid-cols-2 gap-x-5">
           <Field label={`Anthropic API Key ${credSet("anthropicApiKey") ? "✓" : ""}`} type="password" value={credInput.anthropicApiKey} onChange={(v) => setCredInput({ ...credInput, anthropicApiKey: v })} placeholder={credSet("anthropicApiKey") ? "••• 저장됨" : "sk-ant-..."}
             info={"루프가 claude를 호출할 때 쓰는 Anthropic API 키(sk-ant-...)입니다.\n\n비우면 로컬 claude 로그인(구독 인증)으로 폴백합니다. 로컬 claude에 이미 로그인돼 있으면 비워도 동작합니다.\n\n토큰은 이 대시보드 밖으로 전송되지 않습니다."} />
@@ -504,14 +518,10 @@ function ProjectCard({ proj, onDeleted, flash }) {
           <Field label={`Slack Webhook ${credSet("slackWebhookUrl") ? "✓" : ""}`} type="password" value={credInput.slackWebhookUrl} onChange={(v) => setCredInput({ ...credInput, slackWebhookUrl: v })} placeholder={credSet("slackWebhookUrl") ? "••• 저장됨" : "https://hooks.slack.com/services/..."}
             info={"처리 완료/실패 알림을 보낼 Slack Incoming Webhook URL입니다(선택).\n\n비우면 알림을 보내지 않습니다."} />
         </div>
-      </div>
+      </SubSection>
 
       {/* 카드 등록 */}
-      <div className="mt-4 pt-4 border-t border-slate-700">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-300">Jira 카드 등록</span>
-          <Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>
-        </div>
+      <SubSection title="Jira 카드 등록" right={<Btn color="slate" onClick={loadMeta}>메타 새로고침</Btn>}>
         {jiraMeta.err && <p className="text-rose-400 text-sm mb-2">{jiraMeta.err}</p>}
         {!config.projectKey && <p className="text-amber-300/80 text-sm mb-2">프로젝트 키를 먼저 설정·저장하세요.</p>}
         <div className="grid grid-cols-2 gap-x-5">
@@ -582,14 +592,10 @@ function ProjectCard({ proj, onDeleted, flash }) {
           <label className="flex items-center gap-2 cursor-pointer"><input type="checkbox" checked={newCard.assignSelf} onChange={(e) => setNewCard({ ...newCard, assignSelf: e.target.checked })} /><span>나에게 할당</span></label>
         </div>
         <Btn color="green" onClick={createCard} disabled={creating || !config.projectKey}>{creating ? "생성 중…" : "카드 생성"}</Btn>
-      </div>
+      </SubSection>
 
       {/* 카드 상태 */}
-      <div className="mt-4 pt-4 border-t border-slate-700">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-slate-300">카드 상태 <span className="text-xs text-slate-500 font-normal">· 60초 자동 갱신</span></span>
-          <Btn color="slate" onClick={loadCards}>조회</Btn>
-        </div>
+      <SubSection title="카드 상태 · 60초 자동 갱신" right={<Btn color="slate" onClick={loadCards}>조회</Btn>}>
         {cardsErr && <p className="text-rose-400 text-sm mb-2">{cardsErr}</p>}
         {cards.length > 0 && (
           <input value={cardQuery} onChange={(e) => { setCardQuery(e.target.value); setCardPage(0); }} spellCheck={false}
@@ -871,7 +877,7 @@ function ProjectCard({ proj, onDeleted, flash }) {
           </React.Fragment>
           );
         })()}
-      </div>
+      </SubSection>
     </Section>
   );
 }
