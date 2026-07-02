@@ -662,11 +662,22 @@ app.post("/api/logs/:type/clear", (req, res) => {
 });
 
 // 카드 상태
+const myselfCache = new Map();   // cred 토큰 → 내 accountId(할당자=나 판별용)
+async function myAccountId(cfg, cred) {
+  const k = (cred && cred.atlassianToken) || "";
+  if (myselfCache.has(k)) return myselfCache.get(k);
+  let id = "";
+  try { const me = await jiraReq("GET", "/rest/api/3/myself", null, cfg, cred); id = (me && me.accountId) || ""; } catch {}
+  myselfCache.set(k, id);
+  return id;
+}
 app.get("/api/cards", async (req, res) => {
   try {
     const { cfg, cred } = resolveProject(req);
     const proj = cfg.projectKey ? ` AND project = "${cfg.projectKey}"` : "";
-    const data = await jiraSearch(`assignee = currentUser() AND ${triggerClause(cfg)}${proj} ORDER BY created DESC`, cfg, cred);
+    // 할당자 무관하게 트리거(claude-work) 카드를 모두 인식. 각 카드에 assignedToMe 플래그로 구분.
+    const data = await jiraSearch(`${triggerClause(cfg)}${proj} ORDER BY created DESC`, cfg, cred);
+    const myId = await myAccountId(cfg, cred);
     const stateDir = path.join(cfg.cloneBase || path.join(cfg.workDir || SCRIPTS_DIR, "repos"), ".state");
     // 처리 중 여부: 카드별 락 + '살아있는' PID 확인. build/plan(<KEY>.lock)·review(<KEY>.review.lock) 둘 다 인식.
     // (프로세스가 죽은 스테일 락은 '처리 중'으로 보지 않는다.)
@@ -690,7 +701,9 @@ app.get("/api/cards", async (req, res) => {
     };
     const issues = (data.issues || []).map((i) => {
       const catKey = i.fields.status?.statusCategory?.key; // "new" | "indeterminate" | "done"
-      const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}` };
+      const assignee = i.fields.assignee;
+      const assignedToMe = !!myId && !!assignee && assignee.accountId === myId;
+      const it = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name, labels: i.fields.labels || [], url: `https://${cfg.jiraSite}/browse/${i.key}`, assignedToMe, assignee: (assignee && assignee.displayName) || null };
       const proc = procInfo(i.key);
       let stage;
       if (proc) stage = "processing";                                        // 실행 중(살아있는 락)이면 최우선 → 완료 상태여도 중지 가능
