@@ -957,9 +957,18 @@ app.get("/api/epics/:key/children", async (req, res) => {
     // parent 절이 안 먹는 구형(company-managed) 프로젝트는 'Epic Link' 로 재시도
     try { data = await jiraSearch(lib.epicChildrenJql(key, cfg, "parent"), cfg, cred); }
     catch { data = await jiraSearch(lib.epicChildrenJql(key, cfg, "epic-link"), cfg, cred); }
+    // assignedToMe: 태스크 상세에서 '답변 등록'(코멘트+라벨)을 열어줄지 가르는 플래그.
+    // url 은 상세 화면의 'Jira에서 열기' 링크용.
+    const myId = await myAccountId(cfg, cred);
     const children = (data.issues || []).map((i) => {
+      const assignee = i.fields.assignee;
       const t = { key: i.key, summary: i.fields.summary, status: i.fields.status?.name || "", labels: i.fields.labels || [], done: false };
-      return { ...t, step: lib.epicTaskStep(t, cfg) };
+      return {
+        ...t, step: lib.epicTaskStep(t, cfg),
+        assignedToMe: !!myId && !!assignee && assignee.accountId === myId,
+        assignee: (assignee && assignee.displayName) || null,
+        url: `https://${cfg.jiraSite}/browse/${i.key}`,
+      };
     });
     res.json({ ok: true, children });
   } catch (e) { fail(res, e); }

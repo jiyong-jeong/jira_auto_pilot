@@ -1481,6 +1481,8 @@ function EpicPanel({ projects, flash }) {
   const [busy, setBusy] = useState("");
   const repoTouched = React.useRef(false);   // 사용자가 체크를 직접 바꿨는지(폴링이 덮어쓰지 않도록)
   const [reviewLoop, setReviewLoop] = useState(null);         // build 안에서 도는 '승인까지 리뷰 루프' 진행 상황
+  const [taskOpen, setTaskOpen] = useState("");     // 태스크 목록에서 펼친 카드 키
+  const [taskDetail, setTaskDetail] = useState(null); // { key, loading, data } — 펼친 카드의 Jira 내용
   const [autoMerge, setAutoMerge] = useState(false);          // 승인 후 자동 병합
   const [autoMergeMin, setAutoMergeMin] = useState("60");     // 대기(분)
   const [autoRetry, setAutoRetry] = useState(false);          // 중단 시 자동 재시도
@@ -1502,6 +1504,15 @@ function EpicPanel({ projects, flash }) {
     setChildren({ loading: true, items: [] });
     const r = await api.get(`/api/epics/${key}/children?project=${encodeURIComponent(pid)}`);
     setChildren({ loading: false, items: r.ok ? (r.children || []) : [], error: r.ok ? "" : (r.message || "조회 실패") });
+  };
+  // 태스크 목록에서 카드 내용 펼치기 — 프로젝트 카드와 같은 JiraCardPanel 을 그대로 쓴다.
+  // (에픽 하위 카드는 차례가 오기 전엔 트리거 라벨이 없어 프로젝트 '카드 상태' 목록에 안 잡히므로,
+  //  거기로 점프시키는 방식은 쓸 수 없다 — 여기서 직접 조회해 보여준다.)
+  const toggleTask = async (key) => {
+    if (taskOpen === key) { setTaskOpen(""); setTaskDetail(null); return; }
+    setTaskOpen(key); setTaskDetail({ key, loading: true, data: null });
+    const r = await api.get(`/api/jira/issue/${key}?project=${encodeURIComponent(pid)}`);
+    setTaskDetail((p) => (p && p.key === key) ? { key, loading: false, data: r.ok ? r : { error: r.message || "조회 실패" } } : p);
   };
   const loadRun = useCallback(async () => {
     if (!pid || !epicKey) return;
@@ -1532,7 +1543,7 @@ function EpicPanel({ projects, flash }) {
 
   useEffect(() => { setEpicKey(""); setChildren(null); setRun({ running: false, status: "idle" }); repoTouched.current = false; setNewRunMode(false); loadEpics(pid); }, [pid]);
   useEffect(() => { setRepos(repoNames); }, [pid, (proj && (proj.repos || []).length) || 0]);   // 새 실행의 기본은 전체 선택(loadRun 이 진행 중 실행의 실제 repo 로 덮어씀)
-  useEffect(() => { repoTouched.current = false; setNewRunMode(false); loadChildren(epicKey); loadRun(); }, [epicKey]);
+  useEffect(() => { repoTouched.current = false; setNewRunMode(false); setTaskOpen(""); setTaskDetail(null); loadChildren(epicKey); loadRun(); }, [epicKey]);
   useEffect(() => { const t = setInterval(loadRun, 5000); return () => clearInterval(t); }, [loadRun]);
 
   const act = async (name, fn) => {
@@ -1785,13 +1796,30 @@ function EpicPanel({ projects, flash }) {
                 {children && !children.loading && !children.error && children.items.length === 0 && <tr><td colSpan="4" className="px-3 py-3 text-slate-500">미완료 하위 태스크가 없습니다.</td></tr>}
                 {children && !children.loading && children.items.map((t) => {
                   const isCur = cur && cur.key === t.key;
+                  const open = taskOpen === t.key;
                   return (
-                    <tr key={t.key} className={`border-t border-slate-700/70 ${isCur ? "bg-indigo-500/10" : ""}`}>
-                      <td className="px-3 py-2 font-mono text-xs text-indigo-300">{t.key}</td>
-                      <td className="px-3 py-2 truncate" title={t.summary}>{t.summary}</td>
-                      <td className="px-3 py-2 text-xs text-slate-400 truncate" title={t.status}>{t.status}</td>
-                      <td className="px-3 py-2 text-xs text-slate-400">{isCur ? <span className="text-indigo-300">▶ {EPIC_STEP_LABEL[run.step] || run.step}</span> : (EPIC_STEP_LABEL[t.step] || t.step || "-")}</td>
-                    </tr>
+                    <React.Fragment key={t.key}>
+                      <tr onClick={() => toggleTask(t.key)} title="클릭하면 카드 내용을 펼칩니다"
+                        className={`border-t border-slate-700/70 cursor-pointer hover:bg-slate-800/40 ${isCur ? "bg-indigo-500/10" : ""}`}>
+                        <td className="px-3 py-2 font-mono text-xs text-indigo-300">
+                          <span className="inline-block w-3 text-slate-500">{open ? "▾" : "▸"}</span>
+                          {t.url ? <a href={t.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} className="hover:underline">{t.key}</a> : t.key}
+                        </td>
+                        <td className="px-3 py-2 truncate" title={t.summary}>{t.summary}</td>
+                        <td className="px-3 py-2 text-xs text-slate-400 truncate" title={t.status}>{t.status}</td>
+                        <td className="px-3 py-2 text-xs text-slate-400">{isCur ? <span className="text-indigo-300">▶ {EPIC_STEP_LABEL[run.step] || run.step}</span> : (EPIC_STEP_LABEL[t.step] || t.step || "-")}</td>
+                      </tr>
+                      {open && (
+                        <tr className="border-t border-slate-700/70 bg-slate-900/50"><td colSpan="4" className="p-3">
+                          {!taskDetail || taskDetail.key !== t.key || taskDetail.loading ? <p className="text-sm text-slate-500">불러오는 중…</p>
+                            : taskDetail.data && taskDetail.data.error ? <p className="text-sm text-rose-300">{taskDetail.data.error}</p>
+                            : <JiraCardPanel pid={pid} detail={taskDetail.data} assignedToMe={!!t.assignedToMe}
+                                answeredLabel={(proj && proj.answeredLabel) || "claude-answered"} flash={flash}
+                                onDetail={(d) => setTaskDetail((p) => (p && p.key === t.key) ? { ...p, data: d } : p)}
+                                onChanged={() => loadChildren(epicKey)} />}
+                        </td></tr>
+                      )}
+                    </React.Fragment>
                   );
                 })}
               </tbody>
