@@ -20,7 +20,7 @@ Jira 카드를 자동 탐지해 Claude로 개발 → PR → 카드 완료처리�
    - 새 한계/해결 → "11. 트러블슈팅" / "12. 알려진 한계" 갱신
 2. 사용자 사용법이 바뀌면 `README.md` / `LOOP-GUIDE.md`도 함께 갱신한다.
 3. `TODO.md` 항목을 완료했으면 해당 체크박스를 `[x]`로 바꾸고, 그 아래에
-   `→ (완료 YYYY-MM-DD) 변경 요약 · PR 링크` 한 줄을 추가한다.
+   `→ (완료 YYYY-MM-DD) 변경 요약` 한 줄을 추가한다.
 4. **문서 동기화가 포함되지 않은 변경은 "완료"로 간주하지 않는다.** 커밋/PR에 문서 변경을 포함한다.
 
 ## 작업 시 참고
@@ -28,7 +28,6 @@ Jira 카드를 자동 탐지해 Claude로 개발 → PR → 카드 완료처리�
 - 변경 전 `TODO.md`에서 관련 항목과 완료 기준(AC)을 확인한다.
 - 보안: `work.env`, `dashboard/credentials.json`, `dashboard/config.json`, `*.log`, `repos/`,
   `node_modules/` 는 절대 커밋하지 않는다(`.gitignore` 확인).
-- 커밋 메시지에는 관련 Jira 이슈 키를 포함한다.
 
 ## 완료 체크리스트 (PR 전 자가 점검)
 
